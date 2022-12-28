@@ -1,11 +1,8 @@
-use std::{
-    iter::{Chain, FusedIterator, IntoIterator},
-    ops::Range,
-};
+use core::iter::{Chain, FusedIterator, IntoIterator};
+use core::ops::Range;
 
+use crate::list::InversionList;
 use crate::OrderedIndex;
-
-use crate::InversionList;
 
 impl<Ty: OrderedIndex> InversionList<Ty> {
     /// An iterator over the inner ranges contained in this list.
