@@ -234,123 +234,6 @@ impl<Idx: OrderedIndex> FromIterator<Range<Idx>> for InversionList<Idx> {
     }
 }
 
-impl<Idx: OrderedIndex> ops::BitAnd<&InversionList<Idx>> for &InversionList<Idx> {
-    type Output = InversionList<Idx>;
-    fn bitand(self, rhs: &InversionList<Idx>) -> Self::Output {
-        let mut res = InversionList::new();
-
-        let (base, iter) = if self.len() < rhs.len() {
-            (rhs, self.iter())
-        } else {
-            (self, rhs.iter())
-        };
-
-        for range in iter {
-            let (start, end) = base.0.range_binary_search(range.clone());
-            let start = start.unwrap_or_else(core::convert::identity);
-            let end = end.unwrap_or_else(core::convert::identity);
-            debug_assert!(start <= end);
-            res.add_range(
-                range.start.max(base.0.ranges[start].range.start)
-                    ..range.end.min(base.0.ranges[start].range.end),
-            );
-            for range in base.0.ranges.get((start + 1)..end).into_iter().flatten() {
-                // could just copy slices here for efficiency
-                res.add_range(range.range.clone());
-            }
-            res.add_range(
-                range.start.max(base.0.ranges[end].range.start)
-                    ..range.end.min(base.0.ranges[end].range.end),
-            );
-        }
-
-        res
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitAnd<InversionList<Idx>> for &InversionList<Idx> {
-    type Output = InversionList<Idx>;
-    fn bitand(self, rhs: InversionList<Idx>) -> Self::Output {
-        <&InversionList<Idx>>::bitand(self, &rhs)
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitAnd<&InversionList<Idx>> for InversionList<Idx> {
-    type Output = InversionList<Idx>;
-    fn bitand(self, rhs: &InversionList<Idx>) -> Self::Output {
-        <&InversionList<Idx>>::bitand(&self, rhs)
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitAnd<InversionList<Idx>> for InversionList<Idx> {
-    type Output = InversionList<Idx>;
-    fn bitand(self, rhs: InversionList<Idx>) -> Self::Output {
-        <&InversionList<Idx>>::bitand(&self, &rhs)
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitAndAssign<InversionList<Idx>> for InversionList<Idx> {
-    fn bitand_assign(&mut self, rhs: InversionList<Idx>) {
-        *self &= &rhs;
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitAndAssign<&InversionList<Idx>> for InversionList<Idx> {
-    fn bitand_assign(&mut self, rhs: &InversionList<Idx>) {
-        *self = &*self & rhs;
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitOr<&InversionList<Idx>> for &InversionList<Idx> {
-    type Output = InversionList<Idx>;
-    fn bitor(self, rhs: &InversionList<Idx>) -> Self::Output {
-        let (mut res, iter) = if self.len() < rhs.len() {
-            (rhs.clone(), self.iter())
-        } else {
-            (self.clone(), rhs.iter())
-        };
-
-        for range in iter {
-            res.add_range(range);
-        }
-
-        res
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitOr<InversionList<Idx>> for &InversionList<Idx> {
-    type Output = InversionList<Idx>;
-    fn bitor(self, rhs: InversionList<Idx>) -> Self::Output {
-        <&InversionList<Idx>>::bitor(self, &rhs)
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitOr<&InversionList<Idx>> for InversionList<Idx> {
-    type Output = InversionList<Idx>;
-    fn bitor(self, rhs: &InversionList<Idx>) -> Self::Output {
-        <&InversionList<Idx>>::bitor(&self, rhs)
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitOr<InversionList<Idx>> for InversionList<Idx> {
-    type Output = InversionList<Idx>;
-    fn bitor(self, rhs: InversionList<Idx>) -> Self::Output {
-        <&InversionList<Idx>>::bitor(&self, &rhs)
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitOrAssign<InversionList<Idx>> for InversionList<Idx> {
-    fn bitor_assign(&mut self, rhs: InversionList<Idx>) {
-        *self |= &rhs;
-    }
-}
-
-impl<Idx: OrderedIndex> ops::BitOrAssign<&InversionList<Idx>> for InversionList<Idx> {
-    fn bitor_assign(&mut self, rhs: &InversionList<Idx>) {
-        *self = &*self | rhs;
-    }
-}
-
 impl<Idx: OrderedIndex> ops::Not for InversionList<Idx> {
     type Output = InversionList<Idx>;
     fn not(self) -> InversionList<Idx> {
@@ -361,22 +244,39 @@ impl<Idx: OrderedIndex> ops::Not for InversionList<Idx> {
 impl<Idx: OrderedIndex> ops::Not for &InversionList<Idx> {
     type Output = InversionList<Idx>;
     fn not(self) -> InversionList<Idx> {
-        unimplemented!()
-        // let mut res = InversionList::new();
-        // let mut iter = self.iter();
-        // if let Some(range) = iter.next() {
-        //     let mut last = if range.start == Idx::min_value() {
-        //         range.end
-        //     } else {
-        //         res.add_range(Idx::min_value()..range.start);
-        //         range.end
-        //     };
-        //     for range in iter {
-        //         res.add_range(last..range.start);
-        //         last = range.end
-        //     }
-        //     res.add_range(last..Idx::max_value());
-        // }
-        // res
+        let mut ranges = Vec::with_capacity(self.capacity());
+        let mut iter = self.iter();
+        let Some(range) = iter.next() else {
+            return InversionList(InversionMap {
+                ranges: alloc::vec![Entry {
+                    range: Idx::min_value()..Idx::max_value(),
+                    value: ()
+                }],
+            });
+        };
+        let mut last = if range.start == Idx::min_value() {
+            if range.end == Idx::max_value() {
+                return InversionList::new();
+            }
+            range.end
+        } else {
+            ranges.push(Entry {
+                range: Idx::min_value()..range.start,
+                value: (),
+            });
+            range.end
+        };
+        for range in iter {
+            ranges.push(Entry {
+                range: last..range.start,
+                value: (),
+            });
+            last = range.end
+        }
+        ranges.push(Entry {
+            range: last..Idx::max_value(),
+            value: (),
+        });
+        InversionList(InversionMap { ranges })
     }
 }

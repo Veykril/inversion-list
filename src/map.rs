@@ -1,9 +1,9 @@
 use core::cmp::Ordering;
 use core::iter::once;
 use core::marker::PhantomData;
-use core::mem;
 use core::ops::Not;
 use core::ops::{Range, RangeBounds};
+use core::{mem, ops};
 
 use alloc::{vec, vec::Vec};
 
@@ -53,13 +53,19 @@ pub struct EntriesRef<'im, Idx, V> {
     slice: &'im [Entry<Idx, V>],
 }
 
-impl<'im, Idx, V> EntriesRef<'im, Idx, V> {
+impl<'im, Idx: OrderedIndex, V> EntriesRef<'im, Idx, V> {
     pub const fn is_empty(&self) -> bool {
         self.slice.is_empty()
     }
 
     pub const fn len(&self) -> usize {
         self.slice.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Range<Idx>, &V)> + '_ {
+        self.slice
+            .iter()
+            .map(|Entry { range, value }| (range.clone(), value))
     }
 }
 
@@ -600,5 +606,162 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
                 Insert(e) => Insert(idx + e),
             },
         )
+    }
+}
+
+impl<Idx: OrderedIndex, V> ops::BitAnd<&InversionMap<Idx, V>> for &InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitAnd<Output = V>,
+{
+    type Output = InversionMap<Idx, V>;
+    fn bitand(self, rhs: &InversionMap<Idx, V>) -> Self::Output {
+        let mut res = InversionMap::new();
+
+        let (base, iter) = if self.len() < rhs.len() {
+            (rhs, self.iter())
+        } else {
+            (self, rhs.iter())
+        };
+
+        for (range, value) in iter {
+            let (start, end) = base.range_binary_search(range.clone());
+            let start = start.unwrap_or_else(core::convert::identity);
+            let end = end.unwrap_or_else(core::convert::identity);
+            debug_assert!(start <= end);
+            let base_entry = &base.ranges[start];
+            res.add_range(
+                range.start.max(base_entry.range.start)..range.end.min(base_entry.range.end),
+                (&base_entry.value) & value,
+            );
+            for entry in base.ranges.get((start + 1)..end).into_iter().flatten() {
+                // could just copy slices here for efficiency
+                res.add_range(entry.range.clone(), (&entry.value) & value);
+            }
+            let base_entry = &base.ranges[end];
+            res.add_range(
+                range.start.max(base_entry.range.start)..range.end.min(base_entry.range.end),
+                (&base_entry.value) & value,
+            );
+        }
+
+        res
+    }
+}
+
+impl<Idx: OrderedIndex, V> ops::BitAnd<InversionMap<Idx, V>> for &InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitAnd<Output = V>,
+{
+    type Output = InversionMap<Idx, V>;
+    fn bitand(self, rhs: InversionMap<Idx, V>) -> Self::Output {
+        <&InversionMap<Idx, V>>::bitand(self, &rhs)
+    }
+}
+
+impl<Idx: OrderedIndex, V> ops::BitAnd<&InversionMap<Idx, V>> for InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitAnd<Output = V>,
+{
+    type Output = InversionMap<Idx, V>;
+    fn bitand(self, rhs: &InversionMap<Idx, V>) -> Self::Output {
+        <&InversionMap<Idx, V>>::bitand(&self, rhs)
+    }
+}
+
+impl<Idx: OrderedIndex, V> ops::BitAnd<InversionMap<Idx, V>> for InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitAnd<Output = V>,
+{
+    type Output = InversionMap<Idx, V>;
+    fn bitand(self, rhs: InversionMap<Idx, V>) -> Self::Output {
+        <&InversionMap<Idx, V>>::bitand(&self, &rhs)
+    }
+}
+
+impl<Idx: OrderedIndex, V> ops::BitAndAssign<InversionMap<Idx, V>> for InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitAnd<Output = V>,
+{
+    fn bitand_assign(&mut self, rhs: InversionMap<Idx, V>) {
+        *self &= &rhs;
+    }
+}
+
+impl<Idx: OrderedIndex, V> ops::BitAndAssign<&InversionMap<Idx, V>> for InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitAnd<Output = V>,
+{
+    fn bitand_assign(&mut self, rhs: &InversionMap<Idx, V>) {
+        *self = &*self & rhs;
+    }
+}
+
+impl<Idx: OrderedIndex, V: Clone> ops::BitOr<&InversionMap<Idx, V>> for &InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitOr<Output = V>,
+{
+    type Output = InversionMap<Idx, V>;
+    fn bitor(self, rhs: &InversionMap<Idx, V>) -> Self::Output {
+        let (mut res, iter) = if self.len() < rhs.len() {
+            (rhs.clone(), self.iter())
+        } else {
+            (self.clone(), rhs.iter())
+        };
+
+        for (range, v) in iter {
+            res.add_range_with(range, |entries| {
+                entries.iter().fold(v.clone(), |acc, (_, v)| &acc | v)
+            });
+        }
+
+        res
+    }
+}
+
+impl<Idx: OrderedIndex, V: Clone> ops::BitOr<InversionMap<Idx, V>> for &InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitOr<Output = V>,
+{
+    type Output = InversionMap<Idx, V>;
+    fn bitor(self, rhs: InversionMap<Idx, V>) -> Self::Output {
+        <&InversionMap<Idx, V>>::bitor(self, &rhs)
+    }
+}
+
+impl<Idx: OrderedIndex, V: Clone> ops::BitOr<&InversionMap<Idx, V>> for InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitOr<Output = V>,
+{
+    type Output = InversionMap<Idx, V>;
+    fn bitor(self, rhs: &InversionMap<Idx, V>) -> Self::Output {
+        <&InversionMap<Idx, V>>::bitor(&self, rhs)
+    }
+}
+
+impl<Idx: OrderedIndex, V: Clone> ops::BitOr<InversionMap<Idx, V>> for InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitOr<Output = V>,
+{
+    type Output = InversionMap<Idx, V>;
+    fn bitor(self, rhs: InversionMap<Idx, V>) -> Self::Output {
+        <&InversionMap<Idx, V>>::bitor(&self, &rhs)
+    }
+}
+
+impl<Idx: OrderedIndex, V: Clone> ops::BitOrAssign<InversionMap<Idx, V>> for InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitOr<Output = V>,
+{
+    fn bitor_assign(&mut self, rhs: InversionMap<Idx, V>) {
+        *self |= &rhs;
+    }
+}
+
+impl<Idx: OrderedIndex, V: Clone> ops::BitOrAssign<&InversionMap<Idx, V>> for InversionMap<Idx, V>
+where
+    for<'a> &'a V: ops::BitOr<Output = V>,
+{
+    fn bitor_assign(&mut self, rhs: &InversionMap<Idx, V>) {
+        *self = &*self | rhs;
     }
 }
