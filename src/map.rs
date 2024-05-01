@@ -130,7 +130,7 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
                             Some(end) => match self.binary_search(end) {
                                 Ok(_) => true,
                                 // check if there is at least one range inside of our range
-                                Err(idx_e) => idx_e - idx_s > 1,
+                                Err(idx_e) => idx_e - idx_s >= 1,
                             },
                             None => false,
                         }

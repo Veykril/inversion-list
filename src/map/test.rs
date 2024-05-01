@@ -241,6 +241,8 @@ fn intersects() {
     assert!(!il.intersects(0..1));
     assert!(il.intersects(12..17));
     assert!(il.intersects(20..30));
+    assert!(il.intersects(2..8));
+    assert!(il.intersects(0..11));
 }
 
 // #[test]
