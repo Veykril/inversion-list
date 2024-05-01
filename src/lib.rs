@@ -1,9 +1,10 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 
-mod list;
-mod map;
+pub mod list;
+pub mod map;
 
+pub use self::list::InversionList;
 pub use self::map::InversionMap;
 
 mod util;
