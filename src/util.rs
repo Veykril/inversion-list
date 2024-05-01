@@ -1,4 +1,4 @@
-use core::ops::{Bound, Range, RangeBounds, RangeInclusive};
+use core::ops::{Bound, Range, RangeBounds};
 
 use crate::OrderedIndex;
 

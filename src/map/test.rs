@@ -466,6 +466,14 @@ fn intersects() {
 //     assert_eq!(im, im![10..15, 33..34]);
 // }
 
+// #[test]
+// fn test_not() {
+//     let im = im![0usize..5, 5..15, 20..25, 50..80];
+//     assert_eq!(!im, im![15..20, 25..50, 80..!0]);
+//     let im = im![5..15, 20..25, 50..80];
+//     assert_eq!(!im, im![0usize..5, 15..20, 25..50, 80..!0]);
+// }
+
 #[test]
 fn test_bitand() {
     let im = im![0..5 => 0xaaaa, 5..15 => 0xaaaa, 20..25 => 0xaaaa, 50..80 => 0xaaaa];
@@ -482,15 +490,7 @@ fn test_bitor() {
     let im2 = im![0..5 => 0x55, 7..10 => 0x55, 12..18 => 0x55, 19..27 => 0x55, 30..40 => 0x55, 45..55 => 0x55, 57..60 => 0x55, 78..82 => 0x55];
     assert_eq!(
         im | im2,
-        // FIXME THis is wrong
-        im![0..5 => 0xAAFF, 5..18 => 0xAAFF, 19..27 => 0xAAFF, 30..40 => 0x55, 45..82 => 0xAAFF]
+        im![0..5 => 0xAAFF, 5..18 => 0xAAFF, 19..27 => 0xAAFF, 30..40 => 0x55, 45..82 => 0xAAFF],
+        // FIXME should be im![0..5 => 0xAAFF, 5..10 => 0xAAFF, 10..12 => 0xaaaa, 12..15 => 0xAAFF,...]
     );
 }
-
-// #[test]
-// fn test_not() {
-//     let im = im![0usize..5, 5..15, 20..25, 50..80];
-//     assert_eq!(!im, im![15..20, 25..50, 80..!0]);
-//     let im = im![5..15, 20..25, 50..80];
-//     assert_eq!(!im, im![0usize..5, 15..20, 25..50, 80..!0]);
-// }

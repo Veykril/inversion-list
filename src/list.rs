@@ -5,7 +5,6 @@ use core::{mem, ops};
 use alloc::vec::Vec;
 
 use crate::map::{EntriesRef, Entry};
-use crate::util::bounds_to_range;
 use crate::{InversionMap, OrderedIndex};
 
 mod iter;
@@ -32,6 +31,39 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
         self.0.capacity()
     }
 
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn end(&self) -> Option<Idx> {
+        self.0.end()
+    }
+
+    pub fn start(&self) -> Option<Idx> {
+        self.0.start()
+    }
+
+    /// Returns the complete surrounding range, if any.
+    pub fn span(&self) -> Option<Range<Idx>> {
+        self.0.span()
+    }
+
+    pub fn first(&self) -> Option<Range<Idx>> {
+        self.0.first().map(|(range, _)| range)
+    }
+
+    pub fn last(&self) -> Option<Range<Idx>> {
+        self.0.last().map(|(range, _)| range)
+    }
+
     /// Checks whether the given usize is inside any of the contained ranges.
     pub fn contains(&self, value: Idx) -> bool {
         self.0.contains(value)
@@ -39,26 +71,7 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
 
     /// Checks whether this InversionList contains a range that is a "superrange" of the given range.
     pub fn contains_range<R: RangeBounds<Idx>>(&self, range: R) -> bool {
-        if let Some(Range { start, end }) = bounds_to_range(range) {
-            self.0
-                .binary_search(start)
-                .map(|idx_s| end <= self.0.ranges[idx_s].range.end)
-                .unwrap_or(false)
-        } else {
-            false
-        }
-    }
-
-    /// Checks whether this InversionList contains this exact range.
-    pub fn contains_range_strict<R: RangeBounds<Idx>>(&self, range: R) -> bool {
-        if let Some(Range { start, end }) = bounds_to_range(range) {
-            self.0
-                .binary_search(start)
-                .map(|idx_s| end == self.0.ranges[idx_s].range.end)
-                .unwrap_or(false)
-        } else {
-            false
-        }
+        self.lookup_range(range).map_or(false, |it| !it.is_empty())
     }
 
     /// Looks up the range the given index is part of if it is contained within the list.
@@ -75,11 +88,6 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
     pub fn intersects<R: RangeBounds<Idx>>(&self, range: R) -> bool {
         self.0.intersects(range)
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     /// Checks whether `self` is a subset of `other`, meaning whether self's ranges all lie somewhere inside of `other`.
     pub fn is_subset(&self, other: &Self) -> bool {
         self.iter().all(|range| other.contains_range(range))
@@ -88,16 +96,6 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
     /// Checks whether `self` and `other` are entirely disjoint.
     pub fn is_superset(&self, other: &Self) -> bool {
         other.is_subset(self)
-    }
-
-    /// Checks whether `self` is a subset of `other`, meaning whether self's ranges all lie somewhere inside of `other`.
-    pub fn is_subset_strict(&self, other: &Self) -> bool {
-        self.iter().all(|range| other.contains_range_strict(range))
-    }
-
-    /// Checks whether `self` is a strict superset of `other`, meaning whether other containts all of self's ranges.
-    pub fn is_superset_strict(&self, other: &Self) -> bool {
-        other.is_subset_strict(self)
     }
 
     /// Checks whether `self` and `other` are entirely disjoint.
@@ -110,7 +108,7 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
     }
 
     /// Adds a unit range(index..index + 1) to the inversion list. This is faster than using
-    /// [`add_range`] saving a second binary_search.
+    /// [`insert_range`] saving a second binary_search.
     ///
     /// If the unit is not part of an existing range, `true` is returned.
     ///
@@ -119,12 +117,24 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
     /// # Panics
     ///
     /// Panics if index is equal to usize::MAX.
+    pub fn insert_unit(&mut self, index: Idx) -> bool {
+        self.0.insert_unit(index, ())
+    }
+
+    pub fn insert_range<R: RangeBounds<Idx>>(&mut self, range: R) {
+        self.0.insert_range_with(range, |_| ());
+    }
+
+    /// This is the same as [`insert_unit`] with the exception that this function splits apart the
+    /// range this is being inserted into if there is already a range covering this offset.
     pub fn add_unit(&mut self, index: Idx) -> bool {
         self.0.add_unit(index, ())
     }
 
+    /// This is the same as [`insert_range`] with the exception that this function splits apart the
+    /// range this is being inserted into if there is already a range covering this range.
     pub fn add_range<R: RangeBounds<Idx>>(&mut self, range: R) {
-        self.0.insert_range_with(range, |_| ());
+        self.0.add_range_with(range, |_| ());
     }
 
     pub fn remove_range<R: RangeBounds<Idx>>(&mut self, range: R) {
@@ -197,38 +207,13 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
             last = range.range.end;
         }
     }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn end(&self) -> Option<Idx> {
-        self.0.end()
-    }
-
-    pub fn start(&self) -> Option<Idx> {
-        self.0.start()
-    }
-
-    /// Returns the complete surrounding range, if any.
-    pub fn span(&self) -> Option<Range<Idx>> {
-        self.0.span()
-    }
-
-    pub fn first(&self) -> Option<Range<Idx>> {
-        self.0.first().map(|(range, _)| range)
-    }
-
-    pub fn last(&self) -> Option<Range<Idx>> {
-        self.0.last().map(|(range, _)| range)
-    }
 }
 
 impl<Idx: OrderedIndex> FromIterator<Range<Idx>> for InversionList<Idx> {
     fn from_iter<T: IntoIterator<Item = Range<Idx>>>(iter: T) -> Self {
         let mut res = InversionList::new();
         for range in iter {
-            res.add_range(range);
+            res.insert_range(range);
         }
         res
     }

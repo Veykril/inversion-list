@@ -1,11 +1,10 @@
 use core::cmp::Ordering;
 use core::iter::once;
-use core::marker::PhantomData;
 use core::ops::Not;
 use core::ops::{Range, RangeBounds};
 use core::{mem, ops};
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use crate::util::bounds_to_range;
 use crate::util::variance::CovariantLifetime;
@@ -99,6 +98,11 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
     }
 
     #[inline]
+    pub fn clear(&mut self) {
+        self.ranges.clear();
+    }
+
+    #[inline]
     pub fn len(&self) -> usize {
         self.ranges.len()
     }
@@ -176,6 +180,29 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
 }
 
 impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
+    pub fn insert_unit(&mut self, index: Idx, value: V) -> bool {
+        match self.binary_search(index) {
+            Insert(insert_idx) => {
+                self.ranges.insert(
+                    insert_idx,
+                    Entry {
+                        range: index
+                            ..index
+                                .checked_add(Idx::one())
+                                .expect("index is equal to usize::MAX"),
+                        value,
+                    },
+                );
+                true
+            }
+            Within(idx) => {
+                let (_, r) = self.split_impl(idx, index, |_, v| (v.clone(), v));
+                self.split_impl(r, index, |_, v| (value, v));
+                false
+            }
+        }
+    }
+
     /// Inserts a new range with a given value into the map overwriting any ranges that are contained within.
     /// Ranges that partially overlap will be shortened or split accordingly.
     pub fn insert_range<R: RangeBounds<Idx>>(&mut self, range: R, value: V) {
@@ -188,118 +215,79 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
     pub fn insert_range_with<'im, R: RangeBounds<Idx>>(
         &'im mut self,
         range: R,
-        value: impl FnOnce(Entries<'im, Idx, V>) -> V,
+        value: impl FnOnce(EntriesRef<'_, Idx, V>) -> V,
     ) {
-        let Some(range @ Range { start, end }) = bounds_to_range(range) else {
+        let Some(range) = bounds_to_range(range) else {
             return;
         };
-        // x = free space
-        // 0 = occupied space by a range
         match self.range_binary_search(range.clone()) {
-            // ..xxx000x..xxx..
-            //    ^________^
-            (Insert(idx_s), Insert(idx_e)) => {
-                // FIXME: This just overwrites everything inbetween!
-                let it = self.ranges.drain(idx_s..idx_e).collect();
-                self.ranges.insert(
-                    idx_s,
-                    Entry {
-                        range,
-                        value: value(Entries {
-                            it,
-                            covariant: PhantomData,
-                        }),
-                    },
-                );
+            #[cfg(debug_assertions)]
+            (Within(idx_s), Insert(idx_e)) if idx_s == idx_e => {
+                unreachable!("range was empty and should've been filtered out")
             }
-            // ..xx000000xx..
-            //      ^__^
-            (Within(idx_s), Within(idx_e)) if idx_s == idx_e => {
-                let end_segment_range_end = mem::replace(&mut self.ranges[idx_s].range.end, start);
-                let split_value = self.ranges[idx_s].value.clone();
-                let value = value(Entries {
-                    it: vec![Entry {
-                        range: Range { start, end },
-                        value: split_value.clone(),
-                    }],
-                    covariant: PhantomData,
-                });
-                // insert the split off tail
-                self.ranges.insert(
-                    idx_s + 1,
-                    Entry {
-                        range: Range {
-                            start: end,
-                            end: end_segment_range_end,
-                        },
-                        value: split_value,
-                    },
-                );
-                // insert our range
-                self.ranges.insert(idx_s + 1, Entry { range, value });
-            }
-            // ..xx000x..x000xx..
-            //      ^______^
-            (Within(idx_s), Within(idx_e)) => {
-                let x = mem::replace(&mut self.ranges[idx_s].range.end, start);
-                let x2 = mem::replace(&mut self.ranges[idx_e].range.start, end);
-                let val = self.ranges[idx_e].value.clone();
-
-                let mut overlap: Vec<_> = self.ranges.drain(idx_s + 1..idx_e).collect();
-                overlap.insert(
-                    0,
-                    Entry {
-                        range: Range { start, end: x },
-                        value: self.ranges[idx_s].value.clone(),
-                    },
-                );
-                overlap.push(Entry {
-                    range: Range { start: x2, end },
-                    value: val,
-                });
-
-                let value = value(Entries {
-                    it: overlap,
-                    covariant: PhantomData,
-                });
-                self.ranges.insert(idx_s + 1, Entry { range, value });
-            }
-            // ..xx000x..00xxx..
-            //      ^_______^
             (Within(idx_s), Insert(idx_e)) => {
-                let x = mem::replace(&mut self.ranges[idx_s].range.end, start);
-
-                let mut overlap: Vec<_> = self.ranges.drain(idx_s + 1..idx_e).collect();
-                overlap.insert(
-                    0,
-                    Entry {
-                        range: Range { start, end: x },
-                        value: self.ranges[idx_s].value.clone(),
-                    },
-                );
-
-                let value = value(Entries {
-                    it: overlap,
-                    covariant: PhantomData,
-                });
-                self.ranges.insert(idx_s + 1, Entry { range, value });
+                let slice = &self.ranges[idx_s..idx_e];
+                let value = value(EntriesRef { slice });
+                match slice {
+                    [] => self.ranges.insert(idx_s, Entry { range, value }),
+                    [_] => {
+                        self.ranges[idx_s].range.end = range.start;
+                        self.ranges.insert(idx_e, Entry { range, value });
+                    }
+                    [_, .., _] => {
+                        self.ranges[idx_s].range.end = range.start;
+                        self.ranges
+                            .splice(idx_s + 1..idx_e, once(Entry { range, value }));
+                    }
+                }
             }
-            // ..xxx000x..x0x..
-            //    ^________^
+            (Insert(idx_s), Insert(idx_e)) => {
+                let slice = &self.ranges[idx_s..idx_e];
+                let value = value(EntriesRef { slice });
+                match slice {
+                    [] => self.ranges.insert(idx_s, Entry { range, value }),
+                    [..] => {
+                        self.ranges
+                            .splice(idx_s..idx_e, once(Entry { range, value }));
+                    }
+                }
+            }
             (Insert(idx_s), Within(idx_e)) => {
-                let x2 = mem::replace(&mut self.ranges[idx_e].range.start, end);
-                let val = self.ranges[idx_e].value.clone();
-                let mut overlap: Vec<_> = self.ranges.drain(idx_s..idx_e).collect();
-                overlap.push(Entry {
-                    range: Range { start: x2, end },
-                    value: val,
-                });
-
-                let value = value(Entries {
-                    it: overlap,
-                    covariant: PhantomData,
-                });
-                self.ranges.insert(idx_s, Entry { range, value });
+                let slice = &self.ranges[idx_s..=idx_e];
+                let value = value(EntriesRef { slice });
+                match slice {
+                    [] => unreachable!(),
+                    [.., _] => {
+                        self.ranges[idx_e].range.start = range.end;
+                        self.ranges
+                            .splice(idx_s..idx_e, once(Entry { range, value }));
+                    }
+                }
+            }
+            (Within(idx_s), Within(idx_e)) => {
+                let slice = &self.ranges[idx_s..=idx_e];
+                let value = value(EntriesRef { slice });
+                match slice {
+                    [] => unreachable!(),
+                    [entry] => {
+                        let end_val_clone = entry.value.clone();
+                        let end_end = mem::replace(&mut self.ranges[idx_s].range.end, range.start);
+                        self.ranges.insert(
+                            idx_s + 1,
+                            Entry {
+                                range: range.end..end_end,
+                                value: end_val_clone,
+                            },
+                        );
+                        self.ranges.insert(idx_s + 1, Entry { range, value });
+                    }
+                    [_, .., _] => {
+                        self.ranges[idx_s].range.end = range.start;
+                        self.ranges[idx_e].range.start = range.end;
+                        self.ranges
+                            .splice(idx_s + 1..idx_e, once(Entry { range, value }));
+                    }
+                }
             }
         };
     }
@@ -311,7 +299,7 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
     ///
     /// If the unit is not part of an existing range, `true` is returned.
     ///
-    /// If the unit already exists in a range, `false` is returned and then ranges value will be set
+    /// If the unit already exists in a range, `false` is returned and the range value will be set
     /// to `value`.
     ///
     /// # Panics
@@ -332,7 +320,10 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
                 );
                 true
             }
-            Within(_) => false,
+            Within(idx) => {
+                self.ranges[idx].value = value;
+                false
+            }
         }
     }
 
