@@ -77,117 +77,321 @@ fn split_out_of_bounds() {
     assert_eq!(il, im![1..100 => 0]);
 }
 
-#[test]
-fn add_range_start() {
-    let mut il = im![0..10 => 0];
-    il.add_range(0..45, |_| 1);
-    assert_eq!(il, im![0..45 => 1]);
-}
-
-#[test]
-fn add_range_end() {
-    let mut il = im![0..10 => 0, 20..30 => 0];
-    il.add_range(5..10, |_| 1);
-    il.add_range(15..30, |_| 1);
-    assert_eq!(il, im![0..10 => 1, 15..30 => 1]);
-    let mut il = im![0..10 => 0, 20..30 => 0];
-    il.add_range(15..20, |_| 1);
-    assert_eq!(il, im![0..10 => 0, 15..30 => 1]);
-}
+// region: add_range
 
 #[test]
 fn add_range_in_in() {
-    let mut il = im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-    il.add_range(5..45, |_| 1);
-    assert_eq!(il, im![0..50 => 1, 60..70 => 0]);
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.add_range_with(6..8, |entries| {
+        assert_eq!(entries.len(), 1);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..10 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 100..101 => 0];
+    il.add_range_with(6..18, |entries| {
+        assert_eq!(entries.len(), 2);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..20 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 25..30 => 0, 100..101 => 0];
+    il.add_range_with(6..28, |entries| {
+        assert_eq!(entries.len(), 3);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..30 => 1, 100..101 => 0]);
 }
 
 #[test]
 fn add_range_in_out() {
-    let mut il = im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-    il.add_range(5..35, |_| 1);
-    assert_eq!(il, im![0..35 => 1, 40..50 => 0, 60..70 => 0]);
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.add_range_with(6..12, |entries| {
+        assert_eq!(entries.len(), 1);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..12 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 100..101 => 0];
+    il.add_range_with(6..22, |entries| {
+        assert_eq!(entries.len(), 2);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..22 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 25..30 => 0, 100..101 => 0];
+    il.add_range_with(6..32, |entries| {
+        assert_eq!(entries.len(), 3);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..32 => 1, 100..101 => 0]);
 }
 
 #[test]
 fn add_range_out_in() {
-    let mut il = im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-    il.add_range(15..45, |_| 1);
-    assert_eq!(il, im![0..10 => 0, 15..50 => 1, 60..70 => 0]);
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.add_range_with(3..8, |entries| {
+        assert_eq!(entries.len(), 1);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..10 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 100..101 => 0];
+    il.add_range_with(3..18, |entries| {
+        assert_eq!(entries.len(), 2);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..20 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 25..30 => 0, 100..101 => 0];
+    il.add_range_with(3..28, |entries| {
+        assert_eq!(entries.len(), 3);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..30 => 1, 100..101 => 0]);
 }
 
 #[test]
 fn add_range_out_out() {
-    let mut il = im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-    il.add_range(15..55, |_| 1);
-    assert_eq!(il, im![0..10 => 0, 15..55 => 1, 60..70 => 0]);
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.add_range_with(10..12, |entries| {
+        assert_eq!(entries.len(), 0);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..10 => 0, 10..12 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.add_range_with(3..12, |entries| {
+        assert_eq!(entries.len(), 1);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..12 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 100..101 => 0];
+    il.add_range_with(3..22, |entries| {
+        assert_eq!(entries.len(), 2);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..22 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 25..30 => 0, 100..101 => 0];
+    il.add_range_with(3..32, |entries| {
+        assert_eq!(entries.len(), 3);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..32 => 1, 100..101 => 0]);
 }
 
 #[test]
 fn add_range_ignore_max_range() {
     // test to make sure we dont overflow
     let mut il = im![0usize..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-    il.add_range(!0..!0, |_| 1);
+    il.add_range(!0..!0, 1);
     assert_eq!(il, im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0]);
 }
 
 #[test]
+fn add_range_ignore_min_range() {
+    // test to make sure we dont underflow
+    let mut il = im![0usize..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
+    il.add_range(0..0, 1);
+    assert_eq!(il, im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0]);
+}
+
+// endregion
+
+// region:insert_range
+
+#[test]
+fn insert_range_in_in() {
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.insert_range_with(6..8, |entries| {
+        assert_eq!(entries.len(), 1);
+        1
+    });
+    assert_eq!(
+        il,
+        im![0..1 => 0, 5..6 => 0, 6..8 => 1, 8..10 => 0, 100..101 => 0]
+    );
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 100..101 => 0];
+    il.insert_range_with(6..18, |entries| {
+        assert_eq!(entries.len(), 2);
+        1
+    });
+    assert_eq!(
+        il,
+        im![0..1 => 0, 5..6 => 0, 6..18 => 1, 18..20 => 0, 100..101 => 0]
+    );
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 25..30 => 0, 100..101 => 0];
+    il.insert_range_with(6..28, |entries| {
+        assert_eq!(entries.len(), 3);
+        1
+    });
+    assert_eq!(
+        il,
+        im![0..1 => 0, 5..6 => 0, 6..28 => 1, 28..30 => 0, 100..101 => 0]
+    );
+}
+
+#[test]
+fn insert_range_in_out() {
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.insert_range_with(6..12, |entries| {
+        assert_eq!(entries.len(), 1);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..6 => 0, 6..12 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 100..101 => 0];
+    il.insert_range_with(6..22, |entries| {
+        assert_eq!(entries.len(), 2);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..6 => 0, 6..22 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 25..30 => 0, 100..101 => 0];
+    il.insert_range_with(6..32, |entries| {
+        assert_eq!(entries.len(), 3);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..6 => 0, 6..32 => 1, 100..101 => 0]);
+}
+
+#[test]
+fn insert_range_out_in() {
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.insert_range_with(3..8, |entries| {
+        assert_eq!(entries.len(), 1);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..8 => 1, 8..10 => 0, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 100..101 => 0];
+    il.insert_range_with(3..18, |entries| {
+        assert_eq!(entries.len(), 2);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..18 => 1, 18..20 => 0, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 25..30 => 0, 100..101 => 0];
+    il.insert_range_with(3..28, |entries| {
+        assert_eq!(entries.len(), 3);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..28 => 1, 28..30 => 0, 100..101 => 0]);
+}
+
+#[test]
+fn insert_range_out_out() {
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.insert_range_with(10..12, |entries| {
+        assert_eq!(entries.len(), 0);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 5..10 => 0, 10..12 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 100..101 => 0];
+    il.insert_range_with(3..12, |entries| {
+        assert_eq!(entries.len(), 1);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..12 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 100..101 => 0];
+    il.insert_range_with(3..22, |entries| {
+        assert_eq!(entries.len(), 2);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..22 => 1, 100..101 => 0]);
+
+    let mut il = im![0..1 => 0, 5..10 => 0, 15..20 => 0, 25..30 => 0, 100..101 => 0];
+    il.insert_range_with(3..32, |entries| {
+        assert_eq!(entries.len(), 3);
+        1
+    });
+    assert_eq!(il, im![0..1 => 0, 3..32 => 1, 100..101 => 0]);
+}
+
+#[test]
+fn insert_range_ignore_max_range() {
+    // test to make sure we dont overflow
+    let mut il = im![0usize..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
+    il.insert_range(!0..!0, 1);
+    assert_eq!(il, im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0]);
+}
+
+#[test]
+fn insert_range_ignore_min_range() {
+    // test to make sure we dont underflow
+    let mut il = im![0usize..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
+    il.insert_range(0..0, 1);
+    assert_eq!(il, im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0]);
+}
+
+// endregion
+
+#[test]
 fn remove_range_in_in() {
     let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-    il.remove_range(5..45);
-    assert_eq!(il, im![1..5 => 0, 45..50 => 0]);
+    il.remove_range(5..45, |_, _| 1, |_, _| 2);
+    assert_eq!(il, im![1..5 => 1, 45..50 => 2]);
     let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-    il.remove_range(5..40);
-    assert_eq!(il, im![1..5 => 0, 40..50 => 0]);
+    il.remove_range(5..40, |_, _| 1, |_, _| 2);
+    assert_eq!(il, im![1..5 => 1, 40..50 => 0]);
 }
 
 #[test]
 fn remove_range_in_out() {
     let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-    il.remove_range(5..35);
-    assert_eq!(il, im![1..5 => 0, 40..50 => 0]);
+    il.remove_range(5..35, |_, _| 1, |_, _| 2);
+    assert_eq!(il, im![1..5 => 1, 40..50 => 0]);
 }
 
 #[test]
 fn remove_range_out_in() {
     let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-    il.remove_range(15..45);
-    assert_eq!(il, im![1..10 => 0, 45..50 => 0]);
+    il.remove_range(15..45, |_, _| 1, |_, _| 2);
+    assert_eq!(il, im![1..10 => 0, 45..50 => 2]);
 }
 
 #[test]
 fn remove_range_out_out() {
     let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-    il.remove_range(15..35);
+    il.remove_range(15..35, |_, _| 1, |_, _| 2);
+    assert_eq!(il, im![1..10 => 0, 40..50 => 0]);
+    let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
+    il.remove_range(15..30, |_, _| 1, |_, _| 2);
     assert_eq!(il, im![1..10 => 0, 40..50 => 0]);
 }
 
 #[test]
 fn remove_range_subset() {
     let mut il = im![0..100 => 0];
-    il.remove_range(50..75);
-    assert_eq!(il, im![0..50 => 0, 75..100 => 0]);
+    il.remove_range(50..75, |_, _| 1, |_, _| 2);
+    assert_eq!(il, im![0..50 => 1, 75..100 => 2]);
 }
 
 #[test]
 fn remove_range_superset() {
     let mut il = im![0..100 => 0];
-    il.remove_range(0..175);
+    il.remove_range(0..175, |_, _| 1, |_, _| 2);
     assert_eq!(il, im![]);
 }
 
 #[test]
 fn remove_range_end() {
     let mut il = im![0..100 => 0];
-    il.remove_range(50..100);
-    assert_eq!(il, im![0..50 => 0]);
+    il.remove_range(50..100, |_, _| 1, |_, _| 2);
+    assert_eq!(il, im![0..50 => 1]);
 }
 
 #[test]
 fn remove_range_start() {
     let mut il = im![0..100 => 0];
-    il.remove_range(0..50);
-    assert_eq!(il, im![50..100 => 0]);
+    il.remove_range(0..50, |_, _| 1, |_, _| 2);
+    assert_eq!(il, im![50..100 => 2]);
 }
 
 // #[test]
@@ -286,44 +490,3 @@ fn intersects() {
 //     let il = im![5..15, 20..25, 50..80];
 //     assert_eq!(!il, im![0usize..5, 15..20, 25..50, 80..!0]);
 // }
-#[test]
-fn insert_range() {
-    let mut il = im![5u8..100 => false];
-    il.insert_range(0..5, true);
-    assert_eq!(il, im![0..5 => true, 5..100 => false]);
-
-    let mut il = im![5u8..100 => false];
-    il.insert_range(100..105, true);
-    assert_eq!(il, im![5..100 => false, 100..105 => true]);
-
-    let mut il = im![5u8..10 => false, 15..20 => false];
-    il.insert_range(10..15, true);
-    assert_eq!(il, im![5u8..10 => false, 10..15 => true, 15..20 => false]);
-
-    let mut il = im![5u8..10 => false, 15..20 => false];
-    il.insert_range(10..17, true);
-    assert_eq!(il, im![5u8..10 => false, 10..17 => true, 17..20 => false]);
-
-    let mut il = im![5u8..10 => false];
-    il.insert_range(7..9, true);
-    assert_eq!(il, im![5u8..7 => false, 7..9 => true, 9..10 => false]);
-
-    let mut il = im![5u8..10 => false, 15..20 => false];
-    il.insert_range(7..17, true);
-    assert_eq!(il, im![5u8..7 => false, 7..17 => true, 17..20 => false]);
-    let mut il = im![5u8..10 => false, 12..14 => false, 15..20 => false];
-    il.insert_range(7..17, true);
-    assert_eq!(il, im![5u8..7 => false, 7..17 => true, 17..20 => false]);
-
-    let mut il = im![5u8..10 => false, 12..14 => false, 15..20 => false];
-    il.insert_range(7..22, true);
-    assert_eq!(il, im![5u8..7 => false, 7..22 => true]);
-
-    let mut il = im![5u8..10 => false, 12..14 => false, 15..20 => false];
-    il.insert_range(2..17, true);
-    assert_eq!(il, im![2u8..17 => true, 17..20 => false]);
-
-    let mut il = im![5u8..10 => false, 12..14 => false, 15..20 => false];
-    il.insert_range(2..22, true);
-    assert_eq!(il, im![2u8..22 => true]);
-}

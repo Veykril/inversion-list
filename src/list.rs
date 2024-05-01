@@ -114,11 +114,11 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
     }
 
     pub fn add_range<R: RangeBounds<Idx>>(&mut self, range: R) {
-        self.0.add_range(range, |_| ());
+        self.0.insert_range_with(range, |_| ());
     }
 
     pub fn remove_range<R: RangeBounds<Idx>>(&mut self, range: R) {
-        self.0.remove_range(range);
+        self.0.remove_range(range, |_, _| (), |_, _| ());
     }
 
     /// Splits the range that contains `at` in two with `at` being the split point.
@@ -212,10 +212,6 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
     pub fn last(&self) -> Option<Range<Idx>> {
         self.0.last().map(|(range, _)| range)
     }
-
-    pub fn binary_search(&self, key: Idx) -> Result<usize, usize> {
-        self.0.binary_search(key)
-    }
 }
 
 impl<Idx: OrderedIndex> FromIterator<Range<Idx>> for InversionList<Idx> {
@@ -240,14 +236,9 @@ impl<Idx: OrderedIndex> ops::BitAnd<&InversionList<Idx>> for &InversionList<Idx>
         };
 
         for range in iter {
-            let start = base
-                .0
-                .binary_search(range.start)
-                .unwrap_or_else(core::convert::identity);
-            let end = base
-                .0
-                .binary_search(range.end)
-                .unwrap_or_else(|idx| idx - 1 /*FIXME: can this ever underflow?*/);
+            let (start, end) = base.0.range_binary_search(range.clone());
+            let start = start.unwrap_or_else(core::convert::identity);
+            let end = end.unwrap_or_else(core::convert::identity);
             debug_assert!(start <= end);
             res.add_range(
                 range.start.max(base.0.ranges[start].range.start)

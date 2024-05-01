@@ -11,6 +11,9 @@ use crate::util::bounds_to_range;
 use crate::util::variance::CovariantLifetime;
 use crate::OrderedIndex;
 
+use Err as Insert;
+use Ok as Within;
+
 #[cfg(test)]
 mod test;
 
@@ -36,8 +39,28 @@ pub struct Entries<'im, Idx, V> {
     covariant: CovariantLifetime<'im>,
 }
 
+impl<'im, Idx, V> Entries<'im, Idx, V> {
+    pub fn is_empty(&self) -> bool {
+        self.it.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.it.len()
+    }
+}
+
 pub struct EntriesRef<'im, Idx, V> {
-    it: &'im [Entry<Idx, V>],
+    slice: &'im [Entry<Idx, V>],
+}
+
+impl<'im, Idx, V> EntriesRef<'im, Idx, V> {
+    pub const fn is_empty(&self) -> bool {
+        self.slice.is_empty()
+    }
+
+    pub const fn len(&self) -> usize {
+        self.slice.len()
+    }
 }
 
 pub struct EntriesMut<'im, Idx, V> {
@@ -64,30 +87,37 @@ impl<Idx, V> InversionMap<Idx, V> {
 
 // region: delegate methods
 impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.ranges.capacity()
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.ranges.len()
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.ranges.is_empty()
     }
 
+    #[inline]
     pub fn start(&self) -> Option<Idx> {
         self.ranges.first().map(|r| r.range.start)
     }
 
+    #[inline]
     pub fn end(&self) -> Option<Idx> {
         self.ranges.last().map(|r| r.range.end)
     }
 
+    #[inline]
     pub fn first(&self) -> Option<(Range<Idx>, &V)> {
         self.ranges.first().map(|r| (r.range.clone(), &r.value))
     }
 
+    #[inline]
     pub fn last(&self) -> Option<(Range<Idx>, &V)> {
         self.ranges.last().map(|r| (r.range.clone(), &r.value))
     }
@@ -101,50 +131,41 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
     }
 
     /// Looks up the range and value associated with the given index.
-    pub fn lookup(&self, index: Idx) -> Option<(&Range<Idx>, &V)> {
+    pub fn lookup(&self, index: Idx) -> Option<(Range<Idx>, &V)> {
         self.binary_search(index)
-            .map(|idx| (&self.ranges[idx].range, &self.ranges[idx].value))
+            .map(|idx| (self.ranges[idx].range.clone(), &self.ranges[idx].value))
             .ok()
     }
 
     /// Looks up all entries whose ranges overlap with the given range.
     pub fn lookup_range<R: RangeBounds<Idx>>(&self, range: R) -> Option<EntriesRef<'_, Idx, V>> {
-        let Range { start, end } = bounds_to_range(range)?;
-        let slice = match self.range_binary_search(start, end) {
-            (Ok(s), Ok(e)) => &self.ranges[s..=e],
-            (Ok(s), Err(e)) => &self.ranges[s..e],
-            (Err(s), Ok(e)) => &self.ranges[s + 1..=e],
-            (Err(s), Err(e)) => &self.ranges[s + 1..e],
+        let range = bounds_to_range(range)?;
+        let slice = match self.range_binary_search(range) {
+            (Within(s), Within(e)) => &self.ranges[s..=e],
+            (Insert(s) | Within(s), Insert(e)) => &self.ranges[s..e],
+            (Insert(s), Within(e)) => &self.ranges[s + 1..=e],
         };
-        slice.is_empty().not().then(|| EntriesRef { it: slice })
+        slice.is_empty().not().then(|| EntriesRef { slice })
     }
 
     /// Check if the given range intersects with any ranges inside of the inversion list.
     pub fn intersects<R: RangeBounds<Idx>>(&self, range: R) -> bool {
-        match bounds_to_range(range) {
-            Some(Range { start, end }) => {
-                match self.binary_search(start) {
-                    Ok(_) => true,
-                    Err(idx_s) => {
-                        match end.checked_sub(Idx::one()) {
-                            Some(end) => match self.binary_search(end) {
-                                Ok(_) => true,
-                                // check if there is at least one range inside of our range
-                                Err(idx_e) => idx_e - idx_s >= 1,
-                            },
-                            None => false,
-                        }
-                    }
-                }
-            }
-            None => false,
+        let Some(range) = bounds_to_range(range) else {
+            // empty range can't intersect
+            return false;
+        };
+        match self.range_binary_search(range) {
+            // check if there is at least one range inside of our range
+            (Insert(idx_s), Insert(idx_e)) => idx_e - idx_s > 0,
+            _ => true,
         }
     }
 
     /// Returns the complete surrounding range, if any.
     pub fn span(&self) -> Option<Range<Idx>> {
-        self.start()
-            .and_then(|start| self.end().map(move |end| start..end))
+        let start = self.start()?;
+        let end = self.end()?;
+        Some(start..end)
     }
 }
 
@@ -152,59 +173,12 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
     /// Inserts a new range with a given value into the map overwriting any ranges that are contained within.
     /// Ranges that partially overlap will be shortened or split accordingly.
     pub fn insert_range<R: RangeBounds<Idx>>(&mut self, range: R, value: V) {
-        let Some(range @ Range { start, end }) = bounds_to_range(range) else {
-            return;
-        };
-        let entry = Entry { range, value };
-        // x = free space
-        // 0 = occupied space by a range
-        match self.range_binary_search(start, end) {
-            // ..xxx000x..xxx..
-            //    ^________^
-            (Err(idx_s), Err(idx_e)) => {
-                self.ranges.splice(idx_s..idx_e, once(entry));
-            }
-            // ..xx000000xx..
-            //      ^__^
-            (Ok(idx_s), Ok(idx_e)) if idx_s == idx_e => {
-                let end_segment_range_end = mem::replace(&mut self.ranges[idx_s].range.end, start);
-                let split_value = self.ranges[idx_s].value.clone();
-                // insert the split off tail
-                self.ranges.insert(
-                    idx_s + 1,
-                    Entry {
-                        range: Range {
-                            start: end,
-                            end: end_segment_range_end,
-                        },
-                        value: split_value,
-                    },
-                );
-                // insert our range
-                self.ranges.insert(idx_s + 1, entry);
-            }
-            // ..xx000x..x000xx..
-            //      ^______^
-            (Ok(idx_s), Ok(idx_e)) => {
-                self.ranges[idx_s].range.end = start;
-                self.ranges[idx_e].range.start = end;
-                self.ranges.splice(idx_s + 1..idx_e, once(entry));
-            }
-            // ..xx000x..00xxx..
-            //      ^_______^
-            (Ok(idx_s), Err(idx_e)) => {
-                self.ranges[idx_s].range.end = start;
-                self.ranges.splice(idx_s + 1..idx_e, once(entry));
-            }
-            // ..xxx000x..x0x..
-            //    ^________^
-            (Err(idx_s), Ok(idx_e)) => {
-                self.ranges[idx_e].range.start = end;
-                self.ranges.splice(idx_s..idx_e, once(entry));
-            }
-        };
+        self.insert_range_with(range, |_| value.clone());
     }
 
+    /// Inserts a new range with a value produced by `value` into the map. `value` gets passed all
+    /// overlapping entries. If start or end overlap with a range, the overlapping range will be
+    /// split accordingly.
     pub fn insert_range_with<'im, R: RangeBounds<Idx>>(
         &'im mut self,
         range: R,
@@ -215,10 +189,11 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
         };
         // x = free space
         // 0 = occupied space by a range
-        match self.range_binary_search(start, end) {
+        match self.range_binary_search(range.clone()) {
             // ..xxx000x..xxx..
             //    ^________^
-            (Err(idx_s), Err(idx_e)) => {
+            (Insert(idx_s), Insert(idx_e)) => {
+                // FIXME: This just overwrites everything inbetween!
                 let it = self.ranges.drain(idx_s..idx_e).collect();
                 self.ranges.insert(
                     idx_s,
@@ -233,7 +208,7 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
             }
             // ..xx000000xx..
             //      ^__^
-            (Ok(idx_s), Ok(idx_e)) if idx_s == idx_e => {
+            (Within(idx_s), Within(idx_e)) if idx_s == idx_e => {
                 let end_segment_range_end = mem::replace(&mut self.ranges[idx_s].range.end, start);
                 let split_value = self.ranges[idx_s].value.clone();
                 let value = value(Entries {
@@ -259,9 +234,11 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
             }
             // ..xx000x..x000xx..
             //      ^______^
-            (Ok(idx_s), Ok(idx_e)) => {
+            (Within(idx_s), Within(idx_e)) => {
                 let x = mem::replace(&mut self.ranges[idx_s].range.end, start);
                 let x2 = mem::replace(&mut self.ranges[idx_e].range.start, end);
+                let val = self.ranges[idx_e].value.clone();
+
                 let mut overlap: Vec<_> = self.ranges.drain(idx_s + 1..idx_e).collect();
                 overlap.insert(
                     0,
@@ -272,7 +249,7 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
                 );
                 overlap.push(Entry {
                     range: Range { start: x2, end },
-                    value: self.ranges[idx_e].value.clone(),
+                    value: val,
                 });
 
                 let value = value(Entries {
@@ -283,7 +260,7 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
             }
             // ..xx000x..00xxx..
             //      ^_______^
-            (Ok(idx_s), Err(idx_e)) => {
+            (Within(idx_s), Insert(idx_e)) => {
                 let x = mem::replace(&mut self.ranges[idx_s].range.end, start);
 
                 let mut overlap: Vec<_> = self.ranges.drain(idx_s + 1..idx_e).collect();
@@ -303,19 +280,20 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
             }
             // ..xxx000x..x0x..
             //    ^________^
-            (Err(idx_s), Ok(idx_e)) => {
+            (Insert(idx_s), Within(idx_e)) => {
                 let x2 = mem::replace(&mut self.ranges[idx_e].range.start, end);
+                let val = self.ranges[idx_e].value.clone();
                 let mut overlap: Vec<_> = self.ranges.drain(idx_s..idx_e).collect();
                 overlap.push(Entry {
                     range: Range { start: x2, end },
-                    value: self.ranges[idx_e].value.clone(),
+                    value: val,
                 });
 
                 let value = value(Entries {
                     it: overlap,
                     covariant: PhantomData,
                 });
-                self.ranges.insert(idx_s + 1, Entry { range, value });
+                self.ranges.insert(idx_s, Entry { range, value });
             }
         };
     }
@@ -323,20 +301,19 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
 
 impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
     /// Adds a unit range(index..index + 1) to the inversion list. This is faster than using
-    /// [`add_range`] saving a second binary_search.
+    /// [`Self::add_range`] saving a second binary_search.
     ///
     /// If the unit is not part of an existing range, `true` is returned.
     ///
-    /// If the unit already exists in a range, `false` is returned.
+    /// If the unit already exists in a range, `false` is returned and then ranges value will be set
+    /// to `value`.
     ///
     /// # Panics
     ///
-    /// Panics if index is equal to [`Idx::max_value()`].
+    /// Panics if index is equal to [`OrderedIndex::max_value()`].
     pub fn add_unit(&mut self, index: Idx, value: V) -> bool {
         match self.binary_search(index) {
-            Err(insert_idx) => {
-                // this creates a new unit range that may be directly adjacent to an existing one
-                // have a method that tries to merge them directly as well?
+            Insert(insert_idx) => {
                 self.ranges.insert(
                     insert_idx,
                     Entry {
@@ -349,105 +326,178 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
                 );
                 true
             }
-            Ok(_) => false,
+            Within(_) => false,
         }
     }
 
-    pub fn add_range<R: RangeBounds<Idx>>(
+    pub fn add_range<R: RangeBounds<Idx>>(&mut self, range: R, value: V) {
+        self.add_range_with(range, |_| value);
+    }
+
+    /// Adds a new range with a value produced by `value` into the map. `value` gets passed all
+    /// overlapping entries. If start or end overlap with a range, the overlapping range will be
+    /// extended accordingly.
+    pub fn add_range_with<R: RangeBounds<Idx>>(
         &mut self,
         range: R,
-        val_insert: impl FnOnce(EntriesRef<'_, Idx, V>) -> V,
+        value: impl FnOnce(EntriesRef<'_, Idx, V>) -> V,
     ) {
-        let (start, end) = match bounds_to_range(range) {
-            Some(range) => (range.start, range.end),
-            None => return,
+        let Some(range) = bounds_to_range(range) else {
+            return;
         };
 
-        let (idx_s, keep_start) = match self.binary_search(start) {
-            Ok(idx) => (idx, true),
-            // range is outside span, append
-            Err(idx) if idx == self.ranges.len() => {
-                return self.ranges.push(Entry {
-                    range: start..end,
-                    value: val_insert(EntriesRef { it: &[] }),
-                });
+        match self.range_binary_search(range.clone()) {
+            #[cfg(debug_assertions)]
+            (Within(idx_s), Insert(idx_e)) if idx_s == idx_e => {
+                unreachable!("range was empty and should've been filtered out")
             }
-            Err(idx) => (idx, false),
-        };
-        let (idx_e, keep_end) = match self.binary_search(end) {
-            Ok(idx) => (idx, true),
-            // range is outside span, prepend
-            Err(idx) if idx == 0 => {
-                return self.ranges.insert(
-                    0,
-                    Entry {
-                        range: start..end,
-                        value: val_insert(EntriesRef { it: &[] }),
-                    },
-                );
+            (Within(idx_s) | Insert(idx_s), Insert(idx_e)) => {
+                let slice = &self.ranges[idx_s..idx_e];
+                let value = value(EntriesRef { slice });
+                match slice {
+                    // Same indices, surround nothing so insert
+                    [] => self.ranges.insert(idx_s, Entry { range, value }),
+                    // Surrounding a single element, so replace it
+                    [it] => {
+                        let start = it.range.start.min(range.start);
+                        let end = it.range.end.max(range.end);
+                        self.ranges[idx_s] = Entry {
+                            range: start..end,
+                            value,
+                        };
+                    }
+                    // Surrounding multiple elements, merge them and replace
+                    [start, .., end] => {
+                        let start = start.range.start.min(range.start);
+                        let end = end.range.end.max(range.end);
+                        self.ranges.splice(
+                            idx_s..idx_e,
+                            once(Entry {
+                                range: start..end,
+                                value,
+                            }),
+                        );
+                    }
+                }
             }
-            Err(idx) => (idx, false),
-        };
+            (Within(idx_s), Within(idx_e)) => {
+                let slice = &self.ranges[idx_s..=idx_e];
+                let value = value(EntriesRef { slice });
 
-        let val = val_insert(EntriesRef {
-            it: &self.ranges[idx_s..idx_e],
-        });
-        self.ranges[idx_s].value = val;
-        self.ranges[idx_s].range = Range {
-            start: if keep_start {
-                self.ranges[idx_s].range.start
-            } else {
-                start
-            },
-            end: if keep_end {
-                self.ranges[idx_e].range.end
-            } else {
-                end
-            },
-        };
-        if idx_s < idx_e {
-            if keep_end {
-                self.ranges.drain(idx_s + 1..=idx_e);
-            } else {
-                self.ranges.drain(idx_s + 1..idx_e);
+                match slice {
+                    [] => unreachable!(),
+                    [_] => {
+                        self.ranges[idx_s].value = value;
+                    }
+                    [start, .., end] => {
+                        let mut entry = Entry { range, value };
+                        entry.range.start = start.range.start.min(entry.range.start);
+                        entry.range.end = end.range.end.max(entry.range.end);
+                        self.ranges.splice(idx_s..=idx_e, once(entry));
+                    }
+                }
             }
-        }
-    }
-
-    pub fn remove_range_at(&mut self, idx: usize) -> Option<(Range<Idx>, V)> {
-        idx.le(&self.len()).then(|| self.ranges.remove(idx).into())
+            (Insert(idx_s), Within(idx_e)) => {
+                let slice = &self.ranges[idx_s..=idx_e];
+                let value = value(EntriesRef { slice });
+                match slice {
+                    [] => unreachable!(),
+                    [_] => {
+                        self.ranges[idx_e].range.start = range.start.clone();
+                        self.ranges[idx_s].value = value;
+                    }
+                    [start, .., end] => {
+                        let mut entry = Entry { range, value };
+                        entry.range.start = start.range.start.min(entry.range.start);
+                        entry.range.end = end.range.end.max(entry.range.end);
+                        self.ranges.splice(idx_s..=idx_e, once(entry));
+                    }
+                }
+            }
+        };
     }
 }
 
-// raw index based methods
 impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
     /// Removes the range of values overlapping the given range.
-    pub fn remove_range<R: RangeBounds<Idx>>(&mut self, range: R) {
-        let (start, end) = match bounds_to_range(range) {
-            Some(range) => (range.start, range.end),
-            None => return,
+    pub fn remove_range<R: RangeBounds<Idx>>(
+        &mut self,
+        range: R,
+        split_boundary_left: impl FnOnce(Range<Idx>, &V) -> V,
+        split_boundary_right: impl FnOnce(Range<Idx>, &V) -> V,
+    ) {
+        let Some(range) = bounds_to_range(range) else {
+            return;
         };
-
-        let (idx_s, idx_e) = match self.binary_search(start) {
-            Ok(idx_s) => {
-                let (_, idx_s) = self.split_impl(idx_s, start, |_, v| (v.clone(), v));
-                match self.binary_search(end) {
-                    Ok(idx_e) => {
-                        let (_, right) = self.split_impl(idx_e, end, |_, v| (v.clone(), v));
-                        (idx_s, right)
+        match self.range_binary_search(range.clone()) {
+            #[cfg(debug_assertions)]
+            (Within(idx_s), Insert(idx_e)) if idx_s == idx_e => {
+                unreachable!("range was empty and should've been filtered out")
+            }
+            (Insert(idx_s), Insert(idx_e)) => {
+                _ = self.ranges.drain(idx_s..idx_e);
+            }
+            (Within(idx_s), Within(idx_e)) => {
+                let slice = &self.ranges[idx_s..=idx_e];
+                match slice {
+                    [] => unreachable!(),
+                    [entry] => {
+                        let left_range = entry.range.start..range.start;
+                        let left = left_range.is_empty().not().then(|| Entry {
+                            range: left_range,
+                            value: split_boundary_left(entry.range.clone(), &entry.value),
+                        });
+                        let right_range = range.end..entry.range.end;
+                        let right = right_range.is_empty().not().then(|| Entry {
+                            range: right_range,
+                            value: split_boundary_right(entry.range.clone(), &entry.value),
+                        });
+                        self.ranges
+                            .splice(idx_s..=idx_e, [left, right].into_iter().flatten());
                     }
-                    Err(idx_e) => (idx_s, idx_e),
+                    [start, .., end] => {
+                        let left_range = start.range.start..range.start;
+                        let left = left_range.is_empty().not().then(|| Entry {
+                            range: left_range,
+                            value: split_boundary_left(start.range.clone(), &start.value),
+                        });
+                        let right_range = range.end..end.range.end;
+                        let right = right_range.is_empty().not().then(|| Entry {
+                            range: right_range,
+                            value: split_boundary_right(end.range.clone(), &end.value),
+                        });
+                        self.ranges
+                            .splice(idx_s..=idx_e, [left, right].into_iter().flatten());
+                    }
                 }
             }
-            Err(idx_s) => match self.binary_search(end) {
-                Ok(idx_e) => {
-                    let (_, right) = self.split_impl(idx_e, end, |_, v| (v.clone(), v));
-                    (idx_s, right)
+            (Insert(idx_s), Within(idx_e)) => {
+                let slice = &self.ranges[idx_s..=idx_e];
+                match slice {
+                    [] => unreachable!(),
+                    [.., end] if end.range.end != range.end => {
+                        let right = split_boundary_right(end.range.clone(), &end.value);
+                        self.ranges[idx_e].range.start = range.end;
+                        self.ranges[idx_e].value = right;
+                        self.ranges.drain(idx_s..idx_e);
+                    }
+                    [..] => _ = self.ranges.drain(idx_s..=idx_e),
                 }
-                Err(idx_e) => (idx_s, idx_e),
-            },
+            }
+            (Within(idx_s), Insert(idx_e)) => {
+                let slice = &self.ranges[idx_s..idx_e];
+                match slice {
+                    [] => unreachable!(),
+                    [start, ..] if start.range.start != range.start => {
+                        let left = split_boundary_left(start.range.clone(), &start.value);
+                        self.ranges[idx_s].range.end = range.start;
+                        self.ranges[idx_s].value = left;
+                        self.ranges.drain(idx_s + 1..idx_e);
+                    }
+                    [..] => _ = self.ranges.drain(idx_s..idx_e),
+                }
+            }
         };
-        self.ranges.drain(idx_s..idx_e);
     }
 
     /// Splits the range that contains `at` in two with `at` being the split point.
@@ -524,18 +574,21 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
         }
     }
 
-    pub fn binary_search(&self, key: Idx) -> Result<usize, usize> {
+    pub(crate) fn binary_search(&self, key: Idx) -> Result<usize, usize> {
         self.ranges.binary_search_by(move |Entry { range, .. }| {
             Self::bin_search_ordering(range.start.cmp(&key), key.cmp(&range.end))
         })
     }
 
-    fn range_binary_search(
+    pub(crate) fn range_binary_search(
         &self,
-        start: Idx,
-        end: Idx,
+        Range { start, end }: Range<Idx>,
     ) -> (Result<usize, usize>, Result<usize, usize>) {
-        let start @ (Ok(idx) | Err(idx)) = self.binary_search(start);
+        let start @ (Within(idx) | Insert(idx)) = self.binary_search(start);
+        let Some(end) = end.checked_sub(Idx::one()) else {
+            debug_assert!(false);
+            return (Insert(0), Insert(0));
+        };
         let end = self.ranges[idx..].binary_search_by(move |Entry { range, .. }| {
             Self::bin_search_ordering(range.start.cmp(&end), end.cmp(&range.end))
         });
@@ -543,8 +596,8 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
         (
             start,
             match end {
-                Ok(e) => Ok(idx + e),
-                Err(e) => Err(idx + e),
+                Within(e) => Within(idx + e),
+                Insert(e) => Insert(idx + e),
             },
         )
     }

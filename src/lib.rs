@@ -9,7 +9,7 @@ pub use self::map::InversionMap;
 
 mod util;
 
-pub trait OrderedIndex: Sized + Copy + PartialOrd + Ord + Eq {
+pub trait OrderedIndex: Sized + Copy + PartialOrd + Ord + Eq + core::fmt::Debug {
     fn one() -> Self;
     fn min_value() -> Self;
     fn max_value() -> Self;
