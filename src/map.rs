@@ -1,13 +1,21 @@
 use core::cmp::Ordering;
+use core::iter::once;
 use core::marker::PhantomData;
+use core::mem;
 use core::ops::Not;
 use core::ops::{Range, RangeBounds};
-use core::{iter, mem};
 
 use alloc::{vec, vec::Vec};
 
 use crate::util::bounds_to_range;
+use crate::util::variance::CovariantLifetime;
 use crate::OrderedIndex;
+
+#[cfg(test)]
+mod test;
+
+mod iter;
+pub use self::iter::{IntoIter, Iter};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Entry<Idx, V> {
@@ -21,9 +29,11 @@ impl<Idx, V> From<Entry<Idx, V>> for (Range<Idx>, V) {
     }
 }
 
+// These are public APIs that abstract away the internal representation of the inversion map.
+
 pub struct Entries<'im, Idx, V> {
     it: Vec<Entry<Idx, V>>,
-    covariant: PhantomData<&'im mut (Idx, V)>,
+    covariant: CovariantLifetime<'im>,
 }
 
 pub struct EntriesRef<'im, Idx, V> {
@@ -52,11 +62,39 @@ impl<Idx, V> InversionMap<Idx, V> {
     }
 }
 
+// region: delegate methods
 impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
     pub fn capacity(&self) -> usize {
         self.ranges.capacity()
     }
 
+    pub fn len(&self) -> usize {
+        self.ranges.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    pub fn start(&self) -> Option<Idx> {
+        self.ranges.first().map(|r| r.range.start)
+    }
+
+    pub fn end(&self) -> Option<Idx> {
+        self.ranges.last().map(|r| r.range.end)
+    }
+
+    pub fn first(&self) -> Option<(Range<Idx>, &V)> {
+        self.ranges.first().map(|r| (r.range.clone(), &r.value))
+    }
+
+    pub fn last(&self) -> Option<(Range<Idx>, &V)> {
+        self.ranges.last().map(|r| (r.range.clone(), &r.value))
+    }
+}
+// endregion
+
+impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
     /// Checks whether the given index is contained in the map.
     pub fn contains(&self, index: Idx) -> bool {
         self.binary_search(index).is_ok()
@@ -72,7 +110,7 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
     /// Looks up all entries whose ranges overlap with the given range.
     pub fn lookup_range<R: RangeBounds<Idx>>(&self, range: R) -> Option<EntriesRef<'_, Idx, V>> {
         let Range { start, end } = bounds_to_range(range)?;
-        let slice = match self.d_binary_search(start, end) {
+        let slice = match self.range_binary_search(start, end) {
             (Ok(s), Ok(e)) => &self.ranges[s..=e],
             (Ok(s), Err(e)) => &self.ranges[s..e],
             (Err(s), Ok(e)) => &self.ranges[s + 1..=e],
@@ -103,22 +141,6 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.ranges.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.ranges.is_empty()
-    }
-
-    pub fn end(&self) -> Option<Idx> {
-        self.ranges.last().map(|r| r.range.end)
-    }
-
-    pub fn start(&self) -> Option<Idx> {
-        self.ranges.first().map(|r| r.range.start)
-    }
-
     /// Returns the complete surrounding range, if any.
     pub fn span(&self) -> Option<Range<Idx>> {
         self.start()
@@ -130,15 +152,17 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
     /// Inserts a new range with a given value into the map overwriting any ranges that are contained within.
     /// Ranges that partially overlap will be shortened or split accordingly.
     pub fn insert_range<R: RangeBounds<Idx>>(&mut self, range: R, value: V) {
-        let Some(range @ Range { start, end}) =  bounds_to_range(range) else { return };
+        let Some(range @ Range { start, end }) = bounds_to_range(range) else {
+            return;
+        };
         let entry = Entry { range, value };
         // x = free space
         // 0 = occupied space by a range
-        match self.d_binary_search(start, end) {
+        match self.range_binary_search(start, end) {
             // ..xxx000x..xxx..
             //    ^________^
             (Err(idx_s), Err(idx_e)) => {
-                self.ranges.splice(idx_s..idx_e, iter::once(entry));
+                self.ranges.splice(idx_s..idx_e, once(entry));
             }
             // ..xx000000xx..
             //      ^__^
@@ -164,19 +188,19 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
             (Ok(idx_s), Ok(idx_e)) => {
                 self.ranges[idx_s].range.end = start;
                 self.ranges[idx_e].range.start = end;
-                self.ranges.splice(idx_s + 1..idx_e, iter::once(entry));
+                self.ranges.splice(idx_s + 1..idx_e, once(entry));
             }
             // ..xx000x..00xxx..
             //      ^_______^
             (Ok(idx_s), Err(idx_e)) => {
                 self.ranges[idx_s].range.end = start;
-                self.ranges.splice(idx_s + 1..idx_e, iter::once(entry));
+                self.ranges.splice(idx_s + 1..idx_e, once(entry));
             }
             // ..xxx000x..x0x..
             //    ^________^
             (Err(idx_s), Ok(idx_e)) => {
                 self.ranges[idx_e].range.start = end;
-                self.ranges.splice(idx_s..idx_e, iter::once(entry));
+                self.ranges.splice(idx_s..idx_e, once(entry));
             }
         };
     }
@@ -186,10 +210,12 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
         range: R,
         value: impl FnOnce(Entries<'im, Idx, V>) -> V,
     ) {
-        let Some(range @ Range { start, end}) = bounds_to_range(range) else { return };
+        let Some(range @ Range { start, end }) = bounds_to_range(range) else {
+            return;
+        };
         // x = free space
         // 0 = occupied space by a range
-        match self.d_binary_search(start, end) {
+        match self.range_binary_search(start, end) {
             // ..xxx000x..xxx..
             //    ^________^
             (Err(idx_s), Err(idx_e)) => {
@@ -395,6 +421,7 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
 
 // raw index based methods
 impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
+    /// Removes the range of values overlapping the given range.
     pub fn remove_range<R: RangeBounds<Idx>>(&mut self, range: R) {
         let (start, end) = match bounds_to_range(range) {
             Some(range) => (range.start, range.end),
@@ -440,6 +467,7 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
             .map(|idx| self.split_impl(idx, at, |_, v| (v.clone(), v)))
     }
 
+    /// Like [`split`] but allows for the split to be done with a custom function.
     pub fn split_with(
         &mut self,
         at: Idx,
@@ -463,6 +491,7 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
         let to_split = &mut self.ranges[idx];
         if to_split.range.start != at {
             let end = mem::replace(&mut to_split.range.end, at);
+            // FIXME: The clone should not be necessary here
             let value = to_split.value.clone();
             let (left, right) = splitter(to_split.range.clone(), value);
             to_split.value = left;
@@ -495,20 +524,20 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
         }
     }
 
-    pub(crate) fn binary_search(&self, ref key: Idx) -> Result<usize, usize> {
+    pub(crate) fn binary_search(&self, key: Idx) -> Result<usize, usize> {
         self.ranges.binary_search_by(move |Entry { range, .. }| {
-            Self::bin_search_ordering(range.start.cmp(key), key.cmp(&range.end))
+            Self::bin_search_ordering(range.start.cmp(&key), key.cmp(&range.end))
         })
     }
 
-    pub(crate) fn d_binary_search(
+    fn range_binary_search(
         &self,
         start: Idx,
-        ref end: Idx,
+        end: Idx,
     ) -> (Result<usize, usize>, Result<usize, usize>) {
         let start @ (Ok(idx) | Err(idx)) = self.binary_search(start);
         let end = self.ranges[idx..].binary_search_by(move |Entry { range, .. }| {
-            Self::bin_search_ordering(range.start.cmp(end), end.cmp(&range.end))
+            Self::bin_search_ordering(range.start.cmp(&end), end.cmp(&range.end))
         });
 
         (
@@ -518,336 +547,5 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
                 Err(e) => Err(idx + e),
             },
         )
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    macro_rules! im {
-        ($($range:expr => $val:expr),* $(,)?) => {
-            InversionMap {
-                ranges: alloc::vec![
-                    $(Entry { range: $range, value: $val }),*
-                ],
-            }
-        };
-    }
-
-    #[test]
-    fn binary_search() {
-        let il = im![0..5 => 0, 5..15 => 0, 20..25 => 0];
-        assert_eq!(Ok(0), il.binary_search(0));
-        assert_eq!(Ok(0), il.binary_search(1));
-        assert_eq!(Ok(1), il.binary_search(5));
-        assert_eq!(Err(2), il.binary_search(15));
-        assert_eq!(Err(2), il.binary_search(16));
-        assert_eq!(Ok(2), il.binary_search(20));
-        assert_eq!(Err(3), il.binary_search(25));
-    }
-
-    // #[test]
-    // fn merge() {
-    //     let mut il = im![0..5, 5..15, 20..25];
-    //     il.merge(0, 2);
-    //     assert_eq!(il, im![0..25]);
-    // }
-
-    #[test]
-    fn split_inorder() {
-        let mut il = im![0..100 => 0];
-        il.split(5);
-        il.split(15);
-        il.split(25);
-        assert_eq!(il, im![0..5 => 0, 5..15 => 0, 15..25 => 0, 25..100 => 0,]);
-    }
-
-    #[test]
-    fn split_outoforder() {
-        let mut il = im![0..100 => 0];
-        il.split(25);
-        il.split(5);
-        il.split(15);
-        assert_eq!(il, im![0..5 => 0, 5..15 => 0, 15..25 => 0, 25..100 => 0,]);
-    }
-
-    #[test]
-    fn split_double() {
-        let mut il = im![0..100 => 0];
-        il.split(50);
-        il.split(50);
-        assert_eq!(il, im![0..50 => 0, 50..100 => 0]);
-    }
-
-    #[test]
-    fn split_boundary_left() {
-        let mut il = im![0..100 => 0];
-        il.split(0);
-        assert_eq!(il, im![0..100 => 0]);
-    }
-
-    #[test]
-    fn split_boundary_right() {
-        let mut il = im![0..100 => 0];
-        il.split(100);
-        assert_eq!(il, im![0..100 => 0]);
-    }
-
-    #[test]
-    fn split_out_of_bounds() {
-        let mut il = im![1..100 => 0];
-        il.split(101);
-        il.split(1);
-        assert_eq!(il, im![1..100 => 0]);
-    }
-
-    #[test]
-    fn add_range_start() {
-        let mut il = im![0..10 => 0];
-        il.add_range(0..45, |_| 1);
-        assert_eq!(il, im![0..45 => 1]);
-    }
-
-    #[test]
-    fn add_range_end() {
-        let mut il = im![0..10 => 0, 20..30 => 0];
-        il.add_range(5..10, |_| 1);
-        il.add_range(15..30, |_| 1);
-        assert_eq!(il, im![0..10 => 1, 15..30 => 1]);
-        let mut il = im![0..10 => 0, 20..30 => 0];
-        il.add_range(15..20, |_| 1);
-        assert_eq!(il, im![0..10 => 0, 15..30 => 1]);
-    }
-
-    #[test]
-    fn add_range_in_in() {
-        let mut il = im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-        il.add_range(5..45, |_| 1);
-        assert_eq!(il, im![0..50 => 1, 60..70 => 0]);
-    }
-
-    #[test]
-    fn add_range_in_out() {
-        let mut il = im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-        il.add_range(5..35, |_| 1);
-        assert_eq!(il, im![0..35 => 1, 40..50 => 0, 60..70 => 0]);
-    }
-
-    #[test]
-    fn add_range_out_in() {
-        let mut il = im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-        il.add_range(15..45, |_| 1);
-        assert_eq!(il, im![0..10 => 0, 15..50 => 1, 60..70 => 0]);
-    }
-
-    #[test]
-    fn add_range_out_out() {
-        let mut il = im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-        il.add_range(15..55, |_| 1);
-        assert_eq!(il, im![0..10 => 0, 15..55 => 1, 60..70 => 0]);
-    }
-
-    #[test]
-    fn add_range_ignore_max_range() {
-        // test to make sure we dont overflow
-        let mut il = im![0usize..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0];
-        il.add_range(!0..!0, |_| 1);
-        assert_eq!(il, im![0..10 => 0, 20..30 => 0, 40..50 => 0, 60..70 => 0]);
-    }
-
-    #[test]
-    fn remove_range_in_in() {
-        let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-        il.remove_range(5..45);
-        assert_eq!(il, im![1..5 => 0, 45..50 => 0]);
-        let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-        il.remove_range(5..40);
-        assert_eq!(il, im![1..5 => 0, 40..50 => 0]);
-    }
-
-    #[test]
-    fn remove_range_in_out() {
-        let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-        il.remove_range(5..35);
-        assert_eq!(il, im![1..5 => 0, 40..50 => 0]);
-    }
-
-    #[test]
-    fn remove_range_out_in() {
-        let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-        il.remove_range(15..45);
-        assert_eq!(il, im![1..10 => 0, 45..50 => 0]);
-    }
-
-    #[test]
-    fn remove_range_out_out() {
-        let mut il = im![1..10 => 0, 20..30 => 0, 40..50 => 0];
-        il.remove_range(15..35);
-        assert_eq!(il, im![1..10 => 0, 40..50 => 0]);
-    }
-
-    #[test]
-    fn remove_range_subset() {
-        let mut il = im![0..100 => 0];
-        il.remove_range(50..75);
-        assert_eq!(il, im![0..50 => 0, 75..100 => 0]);
-    }
-
-    #[test]
-    fn remove_range_superset() {
-        let mut il = im![0..100 => 0];
-        il.remove_range(0..175);
-        assert_eq!(il, im![]);
-    }
-
-    #[test]
-    fn remove_range_end() {
-        let mut il = im![0..100 => 0];
-        il.remove_range(50..100);
-        assert_eq!(il, im![0..50 => 0]);
-    }
-
-    #[test]
-    fn remove_range_start() {
-        let mut il = im![0..100 => 0];
-        il.remove_range(0..50);
-        assert_eq!(il, im![50..100 => 0]);
-    }
-
-    // #[test]
-    // fn is_subset() {
-    //     let il = im![1..10, 15..26, 61..100];
-    //     let il2 = im![1..5, 17..22, 77..88];
-    //     let il3 = im![1..10, 77..88];
-    //     assert!(il.is_subset(&il));
-    //     assert!(il2.is_subset(&il));
-    //     assert!(il3.is_subset(&il));
-    //     assert!(!il.is_subset(&il2));
-    //     assert!(!il.is_subset(&il3));
-
-    //     assert!(il.is_superset(&il));
-    //     assert!(il.is_superset(&il2));
-    //     assert!(il.is_superset(&il3));
-    //     assert!(!il2.is_superset(&il));
-    //     assert!(!il3.is_superset(&il));
-    // }
-
-    // #[test]
-    // fn is_subset_strict() {
-    //     let il = im![1..10, 15..26, 61..100];
-    //     let il2 = im![1..10, 17..22, 77..88];
-    //     let il3 = im![1..10, 77..88];
-    //     assert!(il.is_subset_strict(&il));
-    //     assert!(!il2.is_subset_strict(&il));
-    //     assert!(il3.is_subset_strict(&il2));
-
-    //     assert!(il.is_superset_strict(&il));
-    //     assert!(!il.is_superset_strict(&il2));
-    //     assert!(il2.is_superset_strict(&il3));
-    // }
-
-    // #[test]
-    // fn is_disjoint() {
-    //     let il = im![1..10, 15..26, 61..100];
-    //     let il2 = im![1..5, 17..22, 77..88, 100..166];
-    //     let il3 = im![1..10, 37..54, 66..100];
-    //     let il4 = im![10..15, 44..55, 60..61];
-    //     assert!(!il.is_disjoint(&il));
-    //     assert!(!il.is_disjoint(&il2));
-    //     assert!(!il.is_disjoint(&il3));
-    //     assert!(il.is_disjoint(&il4));
-    // }
-
-    #[test]
-    fn intersects() {
-        let il = im![1..10 => 0, 15..26 => 0, 61..100 => 0];
-        assert!(il.intersects(5..10));
-        assert!(!il.intersects(0..1));
-        assert!(il.intersects(12..17));
-        assert!(il.intersects(20..30));
-    }
-
-    // #[test]
-    // fn collapse() {
-    //     let mut il = im![1..10, 10..26, 30..33, 33..35, 35..40, 41..45];
-    //     il.collapse();
-    //     assert_eq!(il, im![1..26, 30..40, 41..45]);
-    // }
-
-    // #[test]
-    // fn invert() {
-    //     let mut il = im![1..10, 10..26, 30..33, 33..35, 35..40, 41..45];
-    //     il.invert();
-    //     assert_eq!(il, im![0usize..1, 26..30, 40..41]);
-    //     let mut il = im![0usize..10, 15..26, 26..33, 34..35, 35..36];
-    //     il.invert();
-    //     assert_eq!(il, im![10..15, 33..34]);
-    // }
-
-    // #[test]
-    // fn test_bitand() {
-    //     let il = im![0..5, 5..15, 20..25, 50..80];
-    //     let il2 = im![0..5, 7..10, 12..18, 19..27, 30..40, 45..55, 57..60, 78..82,];
-    //     assert_eq!(
-    //         il & il2,
-    //         im![0..5, 7..10, 12..15, 20..25, 50..55, 57..60, 78..80]
-    //     );
-    // }
-
-    // #[test]
-    // fn test_bitor() {
-    //     let il = im![0..5, 5..15, 20..25, 50..80];
-    //     let il2 = im![0..5, 7..10, 12..18, 19..27, 30..40, 45..55, 57..60, 78..82,];
-    //     assert_eq!(il | il2, im![0..5, 5..18, 19..27, 30..40, 45..82]);
-    // }
-
-    // #[test]
-    // fn test_not() {
-    //     let il = im![0usize..5, 5..15, 20..25, 50..80];
-    //     assert_eq!(!il, im![15..20, 25..50, 80..!0]);
-    //     let il = im![5..15, 20..25, 50..80];
-    //     assert_eq!(!il, im![0usize..5, 15..20, 25..50, 80..!0]);
-    // }
-    #[test]
-    fn insert_range() {
-        let mut il = im![5u8..100 => false];
-        il.insert_range(0..5, true);
-        assert_eq!(il, im![0..5 => true, 5..100 => false]);
-
-        let mut il = im![5u8..100 => false];
-        il.insert_range(100..105, true);
-        assert_eq!(il, im![5..100 => false, 100..105 => true]);
-
-        let mut il = im![5u8..10 => false, 15..20 => false];
-        il.insert_range(10..15, true);
-        assert_eq!(il, im![5u8..10 => false, 10..15 => true, 15..20 => false]);
-
-        let mut il = im![5u8..10 => false, 15..20 => false];
-        il.insert_range(10..17, true);
-        assert_eq!(il, im![5u8..10 => false, 10..17 => true, 17..20 => false]);
-
-        let mut il = im![5u8..10 => false];
-        il.insert_range(7..9, true);
-        assert_eq!(il, im![5u8..7 => false, 7..9 => true, 9..10 => false]);
-
-        let mut il = im![5u8..10 => false, 15..20 => false];
-        il.insert_range(7..17, true);
-        assert_eq!(il, im![5u8..7 => false, 7..17 => true, 17..20 => false]);
-        let mut il = im![5u8..10 => false, 12..14 => false, 15..20 => false];
-        il.insert_range(7..17, true);
-        assert_eq!(il, im![5u8..7 => false, 7..17 => true, 17..20 => false]);
-
-        let mut il = im![5u8..10 => false, 12..14 => false, 15..20 => false];
-        il.insert_range(7..22, true);
-        assert_eq!(il, im![5u8..7 => false, 7..22 => true]);
-
-        let mut il = im![5u8..10 => false, 12..14 => false, 15..20 => false];
-        il.insert_range(2..17, true);
-        assert_eq!(il, im![2u8..17 => true, 17..20 => false]);
-
-        let mut il = im![5u8..10 => false, 12..14 => false, 15..20 => false];
-        il.insert_range(2..22, true);
-        assert_eq!(il, im![2u8..22 => true]);
     }
 }

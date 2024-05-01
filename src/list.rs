@@ -7,7 +7,7 @@ use core::{mem, ops};
 use crate::util::bounds_to_range;
 use crate::{InversionMap, OrderedIndex};
 
-// mod iter;
+mod iter;
 
 /// An inversion list is a data structure that describes a set of non-overlapping numeric ranges, stored in increasing order.
 ///
@@ -62,7 +62,7 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
 
     /// Check if the given range intersects with any ranges inside of the inversion list.
     pub fn intersects<R: RangeBounds<Idx>>(&self, range: R) -> bool {
-        self.intersects(range)
+        self.0.intersects(range)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -71,8 +71,7 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
 
     /// Checks whether `self` is a subset of `other`, meaning whether self's ranges all lie somewhere inside of `other`.
     pub fn is_subset(&self, other: &Self) -> bool {
-        unimplemented!()
-        // self.iter().all(|range| other.contains_range(range))
+        self.iter().all(|range| other.contains_range(range))
     }
 
     /// Checks whether `self` and `other` are entirely disjoint.
@@ -82,8 +81,7 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
 
     /// Checks whether `self` is a subset of `other`, meaning whether self's ranges all lie somewhere inside of `other`.
     pub fn is_subset_strict(&self, other: &Self) -> bool {
-        unimplemented!()
-        // self.iter().all(|range| other.contains_range_strict(range))
+        self.iter().all(|range| other.contains_range_strict(range))
     }
 
     /// Checks whether `self` is a strict superset of `other`, meaning whether other containts all of self's ranges.
@@ -93,12 +91,11 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
 
     /// Checks whether `self` and `other` are entirely disjoint.
     pub fn is_disjoint(&self, other: &Self) -> bool {
-        unimplemented!()
-        // if self.len() <= other.len() {
-        //     !self.iter().any(|range| other.intersects(range))
-        // } else {
-        //     !other.iter().any(|range| self.intersects(range))
-        // }
+        if self.len() <= other.len() {
+            !self.iter().any(|range| other.intersects(range))
+        } else {
+            !other.iter().any(|range| self.intersects(range))
+        }
     }
 
     /// Adds a unit range(index..index + 1) to the inversion list. This is faster than using
