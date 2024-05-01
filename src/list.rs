@@ -4,7 +4,7 @@ use core::{mem, ops};
 
 use alloc::vec::Vec;
 
-use crate::map::Entry;
+use crate::map::{EntriesRef, Entry};
 use crate::util::bounds_to_range;
 use crate::{InversionMap, OrderedIndex};
 
@@ -59,6 +59,16 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
         } else {
             false
         }
+    }
+
+    /// Looks up the range the given index is part of if it is contained within the list.
+    pub fn lookup(&self, index: Idx) -> Option<Range<Idx>> {
+        self.0.lookup(index).map(|(range, _)| range)
+    }
+
+    /// Looks up all entries whose ranges overlap with the given range.
+    pub fn lookup_range<R: RangeBounds<Idx>>(&self, range: R) -> Option<EntriesRef<'_, Idx, ()>> {
+        self.0.lookup_range(range)
     }
 
     /// Check if the given range intersects with any ranges inside of the inversion list.
