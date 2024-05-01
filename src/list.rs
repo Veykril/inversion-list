@@ -1,9 +1,10 @@
-use alloc::vec;
-use core::convert::identity;
 use core::iter::FromIterator;
 use core::ops::{Range, RangeBounds};
 use core::{mem, ops};
 
+use alloc::vec::Vec;
+
+use crate::map::Entry;
 use crate::util::bounds_to_range;
 use crate::{InversionMap, OrderedIndex};
 
@@ -141,18 +142,50 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
     ///
     /// Panics if the indices dont point to a valid index into the vec.
     pub fn merge(&mut self, start: usize, end: usize) {
-        unimplemented!()
+        self.0.ranges[start].range.end = self.0.ranges[end].range.end;
+        self.0.ranges.drain(start + 1..=end);
     }
 
     /// Merges all ranges together that are directly adjacent to each other.
     pub fn collapse(&mut self) {
-        unimplemented!()
+        let ranges = &mut self.0.ranges;
+        let mut i = 1;
+        while i < ranges.len() {
+            if ranges[i - 1].range.end == ranges[i].range.start {
+                ranges[i - 1].range.end = ranges[i].range.end;
+                ranges.remove(i);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Inverts all ranges, meaning existing ranges will be removed and parts that were previously
     /// not covered by ranges will now be covered.
     pub fn invert(&mut self) {
-        unimplemented!()
+        let prev_len = self.0.len();
+        let mut old = mem::replace(&mut self.0.ranges, Vec::with_capacity(prev_len)).into_iter();
+
+        let mut last = match old.next() {
+            Some(range) if range.range.start == Idx::min_value() => range.range.end,
+            Some(range) => {
+                self.0.ranges.push(Entry {
+                    range: Idx::min_value()..range.range.start,
+                    value: (),
+                });
+                range.range.end
+            }
+            None => return,
+        };
+        for range in old {
+            if range.range.start != last {
+                self.0.ranges.push(Entry {
+                    range: last..range.range.start,
+                    value: (),
+                });
+            }
+            last = range.range.end;
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -186,31 +219,39 @@ impl<Idx: OrderedIndex> FromIterator<Range<Idx>> for InversionList<Idx> {
 impl<Idx: OrderedIndex> ops::BitAnd<&InversionList<Idx>> for &InversionList<Idx> {
     type Output = InversionList<Idx>;
     fn bitand(self, rhs: &InversionList<Idx>) -> Self::Output {
-        unimplemented!()
-        // let mut res = InversionList::new();
+        let mut res = InversionList::new();
 
-        // let (base, iter) = if self.len() < rhs.len() {
-        //     (rhs, self.iter())
-        // } else {
-        //     (self, rhs.iter())
-        // };
+        let (base, iter) = if self.len() < rhs.len() {
+            (rhs, self.iter())
+        } else {
+            (self, rhs.iter())
+        };
 
-        // for range in iter {
-        //     let start = base.0.binary_search(range.start).unwrap_or_else(identity);
-        //     let end = base
-        //         .0
-        //         .binary_search(range.end)
-        //         .unwrap_or_else(|idx| idx - 1 /*can this ever underflow?*/);
-        //     debug_assert!(start <= end);
-        //     res.add_range(range.start.max(base[start].start)..range.end.min(base[start].end));
-        //     for range in base.get((start + 1)..end).into_iter().flatten() {
-        //         // could just copy slices here for efficiency
-        //         res.add_range(range.clone());
-        //     }
-        //     res.add_range(range.start.max(base[end].start)..range.end.min(base[end].end));
-        // }
+        for range in iter {
+            let start = base
+                .0
+                .binary_search(range.start)
+                .unwrap_or_else(core::convert::identity);
+            let end = base
+                .0
+                .binary_search(range.end)
+                .unwrap_or_else(|idx| idx - 1 /*FIXME: can this ever underflow?*/);
+            debug_assert!(start <= end);
+            res.add_range(
+                range.start.max(base.0.ranges[start].range.start)
+                    ..range.end.min(base.0.ranges[start].range.end),
+            );
+            for range in base.0.ranges.get((start + 1)..end).into_iter().flatten() {
+                // could just copy slices here for efficiency
+                res.add_range(range.range.clone());
+            }
+            res.add_range(
+                range.start.max(base.0.ranges[end].range.start)
+                    ..range.end.min(base.0.ranges[end].range.end),
+            );
+        }
 
-        // res
+        res
     }
 }
 
@@ -250,18 +291,17 @@ impl<Idx: OrderedIndex> ops::BitAndAssign<&InversionList<Idx>> for InversionList
 impl<Idx: OrderedIndex> ops::BitOr<&InversionList<Idx>> for &InversionList<Idx> {
     type Output = InversionList<Idx>;
     fn bitor(self, rhs: &InversionList<Idx>) -> Self::Output {
-        unimplemented!()
-        // let (mut res, iter) = if self.len() < rhs.len() {
-        //     (rhs.clone(), self.iter())
-        // } else {
-        //     (self.clone(), rhs.iter())
-        // };
+        let (mut res, iter) = if self.len() < rhs.len() {
+            (rhs.clone(), self.iter())
+        } else {
+            (self.clone(), rhs.iter())
+        };
 
-        // for range in iter {
-        //     res.add_range(range);
-        // }
+        for range in iter {
+            res.add_range(range);
+        }
 
-        // res
+        res
     }
 }
 
