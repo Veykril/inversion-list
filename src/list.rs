@@ -204,6 +204,18 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
     pub fn span(&self) -> Option<Range<Idx>> {
         self.0.span()
     }
+
+    pub fn first(&self) -> Option<Range<Idx>> {
+        self.0.first().map(|(range, _)| range)
+    }
+
+    pub fn last(&self) -> Option<Range<Idx>> {
+        self.0.last().map(|(range, _)| range)
+    }
+
+    pub fn binary_search(&self, key: Idx) -> Result<usize, usize> {
+        self.0.binary_search(key)
+    }
 }
 
 impl<Idx: OrderedIndex> FromIterator<Range<Idx>> for InversionList<Idx> {

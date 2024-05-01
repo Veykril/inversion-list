@@ -524,7 +524,7 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
         }
     }
 
-    pub(crate) fn binary_search(&self, key: Idx) -> Result<usize, usize> {
+    pub fn binary_search(&self, key: Idx) -> Result<usize, usize> {
         self.ranges.binary_search_by(move |Entry { range, .. }| {
             Self::bin_search_ordering(range.start.cmp(&key), key.cmp(&range.end))
         })
