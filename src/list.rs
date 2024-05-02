@@ -125,14 +125,10 @@ impl<Idx: OrderedIndex> InversionList<Idx> {
         self.0.insert_range_with(range, |_| ());
     }
 
-    /// This is the same as [`insert_unit`] with the exception that this function splits apart the
-    /// range this is being inserted into if there is already a range covering this offset.
     pub fn add_unit(&mut self, index: Idx) -> bool {
         self.0.add_unit(index, ())
     }
 
-    /// This is the same as [`insert_range`] with the exception that this function splits apart the
-    /// range this is being inserted into if there is already a range covering this range.
     pub fn add_range<R: RangeBounds<Idx>>(&mut self, range: R) {
         self.0.add_range_with(range, |_| ());
     }
@@ -263,5 +259,53 @@ impl<Idx: OrderedIndex> ops::Not for &InversionList<Idx> {
             value: (),
         });
         InversionList(InversionMap { ranges })
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitOr for InversionList<Idx> {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        if self.len() < rhs.len() {
+            rhs | &self
+        } else {
+            self | &rhs
+        }
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitOr<&InversionList<Idx>> for InversionList<Idx> {
+    type Output = Self;
+
+    fn bitor(mut self, rhs: &Self) -> Self::Output {
+        for range in rhs {
+            self.add_range(range);
+        }
+
+        self
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitOr<InversionList<Idx>> for &InversionList<Idx> {
+    type Output = InversionList<Idx>;
+
+    fn bitor(self, rhs: InversionList<Idx>) -> Self::Output {
+        rhs | self
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitOrAssign for InversionList<Idx> {
+    fn bitor_assign(&mut self, rhs: Self) {
+        for range in rhs {
+            self.add_range(range);
+        }
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitOrAssign<&InversionList<Idx>> for InversionList<Idx> {
+    fn bitor_assign(&mut self, rhs: &InversionList<Idx>) {
+        for range in rhs {
+            self.add_range(range);
+        }
     }
 }
