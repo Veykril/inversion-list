@@ -13,8 +13,17 @@ impl<Idx: OrderedIndex, V> InversionMap<Idx, V> {
     }
 }
 
+#[derive(Debug)]
 pub struct Iter<'il, Idx: OrderedIndex, V> {
     iter: core::slice::Iter<'il, Entry<Idx, V>>,
+}
+
+impl<'il, Idx: OrderedIndex, V> Clone for Iter<'il, Idx, V> {
+    fn clone(&self) -> Self {
+        Self {
+            iter: self.iter.clone(),
+        }
+    }
 }
 
 impl<'a, Idx: OrderedIndex, V> Iterator for Iter<'a, Idx, V> {
@@ -48,6 +57,7 @@ impl<'il, Idx: OrderedIndex, V> IntoIterator for &'il InversionMap<Idx, V> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct IntoIter<Idx: OrderedIndex, V> {
     iter: alloc::vec::IntoIter<Entry<Idx, V>>,
 }

@@ -221,15 +221,11 @@ impl<Idx: OrderedIndex, V: Clone> InversionMap<Idx, V> {
             return;
         };
         match self.range_binary_search(range.clone()) {
-            #[cfg(debug_assertions)]
-            (Within(idx_s), Insert(idx_e)) if idx_s == idx_e => {
-                unreachable!("range was empty and should've been filtered out")
-            }
             (Within(idx_s), Insert(idx_e)) => {
                 let slice = &self.ranges[idx_s..idx_e];
                 let value = value(EntriesRef { slice });
                 match slice {
-                    [] => self.ranges.insert(idx_s, Entry { range, value }),
+                    [] => unreachable!("range was empty and should've been filtered out"),
                     [_] => {
                         self.ranges[idx_s].range.end = range.start;
                         self.ranges.insert(idx_e, Entry { range, value });

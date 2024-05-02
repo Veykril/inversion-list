@@ -52,6 +52,7 @@ impl<Ty: OrderedIndex> InversionList<Ty> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Iter<'a, Ty: OrderedIndex> {
     iter: map::Iter<'a, Ty, ()>,
 }
@@ -83,6 +84,7 @@ impl<'a, Ty: OrderedIndex> IntoIterator for &'a InversionList<Ty> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct IntoIter<Ty: OrderedIndex> {
     iter: map::IntoIter<Ty, ()>,
 }
@@ -118,6 +120,7 @@ impl<Ty: OrderedIndex> IntoIterator for InversionList<Ty> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Difference<'a, Ty: OrderedIndex> {
     pub(crate) iter: Iter<'a, Ty>,
     pub(crate) other: &'a InversionList<Ty>,
@@ -145,6 +148,7 @@ impl<Ty: OrderedIndex> Iterator for Difference<'_, Ty> {
 
 impl<Ty: OrderedIndex> FusedIterator for Difference<'_, Ty> {}
 
+#[derive(Debug, Clone)]
 pub struct SymmetricDifference<'a, Ty: OrderedIndex> {
     pub(crate) iter: Chain<Difference<'a, Ty>, Difference<'a, Ty>>,
 }
@@ -165,6 +169,7 @@ impl<Ty: OrderedIndex> Iterator for SymmetricDifference<'_, Ty> {
 
 impl<Ty: OrderedIndex> FusedIterator for SymmetricDifference<'_, Ty> {}
 
+#[derive(Debug, Clone)]
 pub struct Union<'a, Ty: OrderedIndex> {
     pub(crate) iter: Chain<Iter<'a, Ty>, Difference<'a, Ty>>,
 }
@@ -185,6 +190,7 @@ impl<Ty: OrderedIndex> Iterator for Union<'_, Ty> {
 
 impl<Ty: OrderedIndex> FusedIterator for Union<'_, Ty> {}
 
+#[derive(Debug, Clone)]
 pub struct Intersection<'a, Ty: OrderedIndex> {
     pub(crate) iter: Iter<'a, Ty>,
     pub(crate) other: &'a InversionList<Ty>,

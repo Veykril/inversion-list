@@ -309,3 +309,76 @@ impl<Idx: OrderedIndex> ops::BitOrAssign<&InversionList<Idx>> for InversionList<
         }
     }
 }
+
+impl<Idx: OrderedIndex> ops::BitAnd<&InversionList<Idx>> for &InversionList<Idx> {
+    type Output = InversionList<Idx>;
+    fn bitand(self, rhs: &InversionList<Idx>) -> Self::Output {
+        use Err as Insert;
+        use Ok as Within;
+
+        let mut res = InversionList::new();
+
+        let (base, iter) = if self.len() < rhs.len() {
+            (rhs, self.iter())
+        } else {
+            (self, rhs.iter())
+        };
+
+        for range in iter {
+            // we fetch all ranges in base, that overlap with range from iter
+            match base.0.range_binary_search(range.clone()) {
+                #[cfg(debug_assertions)]
+                (Within(idx_s), Insert(idx_e)) if idx_s == idx_e => {
+                    unreachable!("range was empty and should've been filtered out")
+                }
+                // left side in bounds, right side out of bounds
+                (Within(idx_s), Insert(idx_e)) => {
+                    let slice = &base.0.ranges[idx_s..idx_e];
+                    match slice {
+                        [] => unreachable!("range was empty and should've been filtered out"),
+                        [left, middle @ ..] => {
+                            res.insert_range(range.start..left.range.end);
+                            middle.iter().for_each(|entry| {
+                                res.insert_range(entry.range.clone());
+                            });
+                        }
+                    }
+                }
+                (Insert(idx_s), Insert(idx_e)) => {
+                    base.0.ranges[idx_s..idx_e].iter().for_each(|entry| {
+                        res.insert_range(entry.range.clone());
+                    });
+                }
+                (Insert(idx_s), Within(idx_e)) => {
+                    let slice = &base.0.ranges[idx_s..=idx_e];
+                    match slice {
+                        [] => unreachable!(),
+                        [middle @ .., right] => {
+                            res.insert_range(right.range.start..range.end);
+                            middle.iter().for_each(|entry| {
+                                res.insert_range(entry.range.clone());
+                            });
+                        }
+                    }
+                }
+                // both sides in bounds
+                (Within(idx_s), Within(idx_e)) => {
+                    let slice = &base.0.ranges[idx_s..=idx_e];
+                    match slice {
+                        [] => unreachable!(),
+                        [_] => res.insert_range(range.clone()),
+                        [left, middle @ .., right] => {
+                            res.insert_range(range.start..left.range.end);
+                            middle.iter().for_each(|entry| {
+                                res.insert_range(entry.range.clone());
+                            });
+                            res.insert_range(right.range.start..range.end);
+                        }
+                    }
+                }
+            }
+        }
+
+        res
+    }
+}
