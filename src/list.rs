@@ -382,3 +382,36 @@ impl<Idx: OrderedIndex> ops::BitAnd<&InversionList<Idx>> for &InversionList<Idx>
         res
     }
 }
+
+impl<Idx: OrderedIndex> ops::BitAnd<&InversionList<Idx>> for InversionList<Idx> {
+    type Output = Self;
+    fn bitand(self, rhs: &InversionList<Idx>) -> Self::Output {
+        &self & rhs
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitAnd<InversionList<Idx>> for &InversionList<Idx> {
+    type Output = InversionList<Idx>;
+    fn bitand(self, rhs: InversionList<Idx>) -> Self::Output {
+        self & &rhs
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitAnd<InversionList<Idx>> for InversionList<Idx> {
+    type Output = InversionList<Idx>;
+    fn bitand(self, rhs: InversionList<Idx>) -> Self::Output {
+        self & &rhs
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitAndAssign for InversionList<Idx> {
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self &= &rhs;
+    }
+}
+
+impl<Idx: OrderedIndex> ops::BitAndAssign<&InversionList<Idx>> for InversionList<Idx> {
+    fn bitand_assign(&mut self, rhs: &InversionList<Idx>) {
+        *self = &*self & rhs;
+    }
+}
